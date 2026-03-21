@@ -36,7 +36,7 @@ _HOME_DIR = os.environ.get("HOME", "/home/appuser")
 # Model info displayed in GitHub comment per CLI
 _CLI_MODEL_INFO: dict[str, str] = {
     "claude": "Claude Opus 4",
-    "codex": "GPT-5.4",
+    "codex": "o3",
     "gemini": "Gemini 3.0 Pro",
 }
 
@@ -85,7 +85,7 @@ def _build_command(cli: str) -> list[str]:
     if cli == "claude":
         return ["claude", "--model", "sonnet", "--max-turns", "5"]
     if cli == "codex":
-        return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-m", "gpt-5.4"]
+        return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-m", "o3"]
     if cli == "gemini":
         return ["gemini", "--model", "gemini-3-pro-preview", "--yolo"]
     raise ValueError(f"Unknown CLI: {cli!r}")
