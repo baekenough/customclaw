@@ -174,6 +174,82 @@ services:
       AIRFLOW_API_PASSWORD: ${AIRFLOW_API_PASSWORD}
       AUTH_TRUST_HOST: "true"
 
+  claude-analyzer:
+    image: ghcr.io/baekenough/customclaw-slack-bolt:latest
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
+      - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
+      - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
+    environment:
+      REDIS_URL: redis://redis:6379
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      REPO_PATH: ${CONTAINER_HOME}/workspace/oh-my-customcode
+      ANALYZER_CLI: claude
+      ANALYZER_STREAM: "customclaw:claude-analysis"
+      ANALYZER_GROUP: claude-analyzers
+      SLACK_BOT_TOKEN: ${AGENTNAV_CLAUDE_SLACK_BOT_TOKEN}
+      SLACK_CHANNEL: ${AGENTNAV_SLACK_CHANNEL}
+      HOME: ${CONTAINER_HOME}
+      CONTAINER_HOME: ${CONTAINER_HOME}
+    command: python -m slack_bot.docs_analyzer
+
+  codex-analyzer:
+    image: ghcr.io/baekenough/customclaw-slack-bolt:latest
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ${CODEX_CONFIG_DIR}:${CONTAINER_HOME}/.codex
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
+    environment:
+      REDIS_URL: redis://redis:6379
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      REPO_PATH: ${CONTAINER_HOME}/workspace/oh-my-customcode
+      ANALYZER_CLI: codex
+      ANALYZER_STREAM: "customclaw:codex-analysis"
+      ANALYZER_GROUP: codex-analyzers
+      SLACK_BOT_TOKEN: ${AGENTNAV_CODEX_SLACK_BOT_TOKEN}
+      SLACK_CHANNEL: ${AGENTNAV_SLACK_CHANNEL}
+      HOME: ${CONTAINER_HOME}
+      CONTAINER_HOME: ${CONTAINER_HOME}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    command: python -m slack_bot.docs_analyzer
+
+  gemini-analyzer:
+    image: ghcr.io/baekenough/customclaw-slack-bolt:latest
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ${GEMINI_CONFIG_DIR}:${CONTAINER_HOME}/.gemini
+      - ${GEMINI_NPM_GLOBAL_DIR}:${CONTAINER_HOME}/.npm-global:ro
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
+    environment:
+      REDIS_URL: redis://redis:6379
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      NODE_PATH: ${CONTAINER_HOME}/.npm-global/lib/node_modules
+      PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CONTAINER_HOME}/.npm-global/bin
+      REPO_PATH: ${CONTAINER_HOME}/workspace/oh-my-customcode
+      ANALYZER_CLI: gemini
+      ANALYZER_STREAM: "customclaw:gemini-analysis"
+      ANALYZER_GROUP: gemini-analyzers
+      SLACK_BOT_TOKEN: ${AGENTNAV_GEMINI_SLACK_BOT_TOKEN}
+      SLACK_CHANNEL: ${AGENTNAV_SLACK_CHANNEL}
+      HOME: ${CONTAINER_HOME}
+      CONTAINER_HOME: ${CONTAINER_HOME}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+    command: python -m slack_bot.docs_analyzer
+
   watchtower:
     image: nickfedor/watchtower
     container_name: customclaw-watchtower
