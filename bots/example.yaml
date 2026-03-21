@@ -8,6 +8,15 @@
 
 name: example-bot                        # Unique bot ID (kebab-case)
 
+# Platform: "slack" (default) or "mattermost"
+# platform: slack
+
+# Mattermost configuration (uncomment if platform: mattermost)
+# mattermost:
+#   url: mattermost.example.com          # Mattermost server hostname or IP
+#   token: ${MM_BOT_TOKEN}               # Bot Personal Access Token
+#   port: 8065                           # Mattermost server port (default: 8065)
+
 slack:
   app_token: ${MY_BOT_SLACK_APP_TOKEN}   # Socket Mode token (xapp-...)
   bot_token: ${MY_BOT_SLACK_BOT_TOKEN}   # Bot OAuth token (xoxb-...)

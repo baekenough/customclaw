@@ -53,11 +53,20 @@ class SecurityConfig:
 
 
 @dataclass
+class MattermostConfig:
+    url: str = ""
+    token: str = ""
+    port: int = 8065
+
+
+@dataclass
 class BotConfig:
     id: str
     name: str
     slack_app_token: str
     slack_bot_token: str
+    platform: str = "slack"
+    mattermost: MattermostConfig = field(default_factory=MattermostConfig)
     channels: list[str] = field(default_factory=list)
     persona: PersonaConfig = field(default_factory=PersonaConfig)
     project: ProjectConfig = field(default_factory=ProjectConfig)
@@ -76,12 +85,54 @@ def _resolve_env(value: str) -> str:
     return value
 
 
+def _validate_bot_config(config: BotConfig) -> None:
+    """Validate platform-specific required fields.
+
+    Raises:
+        ValueError: If required fields for the chosen platform are missing.
+    """
+    if config.platform == "slack":
+        missing = [
+            field
+            for field, value in [
+                ("slack_app_token", config.slack_app_token),
+                ("slack_bot_token", config.slack_bot_token),
+            ]
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Bot '{config.id}' (platform=slack) missing required fields: "
+                + ", ".join(missing)
+            )
+    elif config.platform == "mattermost":
+        missing = [
+            field
+            for field, value in [
+                ("mattermost.url", config.mattermost.url),
+                ("mattermost.token", config.mattermost.token),
+            ]
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Bot '{config.id}' (platform=mattermost) missing required fields: "
+                + ", ".join(missing)
+            )
+    else:
+        raise ValueError(
+            f"Bot '{config.id}' has unsupported platform: '{config.platform}'. "
+            "Supported values: 'slack', 'mattermost'."
+        )
+
+
 def load_bot_from_yaml(path: Path) -> BotConfig:
     """Load a single bot configuration from a YAML file."""
     with open(path) as f:
         data = yaml.safe_load(f)
 
     slack = data.get("slack", {})
+    mattermost_data = data.get("mattermost", {})
     persona_data = data.get("persona", {})
     project_data = data.get("project", {})
     airflow_data = data.get("airflow", {})
@@ -90,11 +141,17 @@ def load_bot_from_yaml(path: Path) -> BotConfig:
     security_data = data.get("security", {})
     tools_data = data.get("tools", {})
 
-    return BotConfig(
+    config = BotConfig(
         id=data["name"],
         name=data["name"],
+        platform=data.get("platform", "slack"),
         slack_app_token=_resolve_env(slack.get("app_token", "")),
         slack_bot_token=_resolve_env(slack.get("bot_token", "")),
+        mattermost=MattermostConfig(
+            url=_resolve_env(mattermost_data.get("url", "")),
+            token=_resolve_env(mattermost_data.get("token", "")),
+            port=mattermost_data.get("port", 8065),
+        ),
         channels=slack.get("channels", []),
         persona=PersonaConfig(
             display_name=persona_data.get("display_name", ""),
@@ -125,6 +182,8 @@ def load_bot_from_yaml(path: Path) -> BotConfig:
             dangerous_tools=security_data.get("dangerous_tools", []),
         ),
     )
+    _validate_bot_config(config)
+    return config
 
 
 def _as_dict(value) -> dict:
@@ -263,11 +322,7 @@ def load_all_bots(bots_dir: str = "/app/bots") -> list[BotConfig]:
         for yaml_file in sorted(bots_path.glob("*.yaml")):
             try:
                 config = load_bot_from_yaml(yaml_file)
-                if (
-                    config.id not in configs_by_id
-                    and config.slack_app_token
-                    and config.slack_bot_token
-                ):
+                if config.id not in configs_by_id:
                     configs_by_id[config.id] = config
             except Exception as e:
                 print(f"[WARNING] Failed to load bot config {yaml_file}: {e}")

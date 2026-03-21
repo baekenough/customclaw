@@ -17,9 +17,10 @@ import time
 
 import redis
 import requests
-from slack_sdk import WebClient
 
 from slack_bot.config.loader import load_all_bots, BotConfig
+from slack_bot.platforms.base import ResponsePublisher
+from slack_bot.platforms.slack_adapter import SlackResponsePublisher
 from slack_bot.memory.extractor import MemoryExtractor
 from slack_bot.memory.search import HybridSearch
 from slack_bot.memory.store import MessageStore
@@ -48,6 +49,10 @@ log = logging.getLogger(__name__)
 
 STREAM_KEY = "customclaw:slack-messages"
 CONSUMER_GROUP = os.environ.get("REDIS_CONSUMER_GROUP", "customclaw-workers")
+
+# Module-level cache for response publishers (keyed by "platform:bot_id").
+# Avoids creating a new HTTP session + login call per message.
+_publisher_cache: dict[str, ResponsePublisher] = {}
 CONSUMER_NAME = os.environ.get(
     "REDIS_CONSUMER_NAME", f"worker-{socket.gethostname()}"
 )
@@ -56,6 +61,41 @@ CODEX_CLI_PATH = os.environ.get("CODEX_CLI_PATH", "codex")
 PENDING_IDLE_MS = int(os.environ.get("REDIS_PENDING_IDLE_MS", "30000"))
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_WORKERS", "10"))
 MERGE_WINDOW = int(os.environ.get("MERGE_WINDOW_SECONDS", "30"))
+
+
+def _get_publisher(msg_data: dict, bots: dict) -> ResponsePublisher:
+    """Return a cached ResponsePublisher for the message's platform and bot.
+
+    For Mattermost, the publisher performs a ``driver.login()`` on first
+    creation.  Caching avoids repeating that HTTP round-trip for every
+    message.
+    """
+    platform = msg_data.get("platform", "slack")
+    bot_id = msg_data.get("bot_id", "")
+    cache_key = f"{platform}:{bot_id}"
+
+    if cache_key in _publisher_cache:
+        return _publisher_cache[cache_key]
+
+    if platform == "mattermost":
+        from slack_bot.platforms.mattermost_adapter import MattermostResponsePublisher  # noqa: PLC0415
+        config = bots.get(bot_id)
+        if config and hasattr(config, "mattermost"):
+            publisher: ResponsePublisher = MattermostResponsePublisher(
+                token=config.mattermost.token,
+                url=config.mattermost.url,
+                port=config.mattermost.port,
+            )
+        else:
+            publisher = MattermostResponsePublisher(
+                token=msg_data.get("bot_token", ""),
+                url=msg_data.get("platform_url", ""),
+            )
+    else:
+        publisher = SlackResponsePublisher(bot_token=msg_data.get("bot_token", ""))
+
+    _publisher_cache[cache_key] = publisher
+    return publisher
 
 
 class AgentExecutionError(RuntimeError):
@@ -460,7 +500,7 @@ def _execute_tool(
 
 
 def _detect_analysis_thread(
-    slack_client: WebClient,
+    publisher: ResponsePublisher,
     channel_id: str,
     thread_ts: str,
 ) -> int | None:
@@ -468,11 +508,19 @@ def _detect_analysis_thread(
 
     Returns the issue number if the parent message matches analysis patterns,
     None otherwise.
+
+    Note: Analysis thread detection requires fetching the thread root message,
+    which is currently only supported for Slack (``SlackResponsePublisher``).
+    On other platforms, this always returns ``None``.
     """
     if not thread_ts:
         return None
+
+    if not isinstance(publisher, SlackResponsePublisher):
+        return None
+
     try:
-        result = slack_client.conversations_history(
+        result = publisher._client.conversations_history(
             channel=channel_id,
             latest=thread_ts,
             inclusive=True,
@@ -637,20 +685,21 @@ def process_message(
     text = msg_data.get("text", "")
     message_ts = msg_data.get("message_ts", "")
     bot_token = msg_data.get("bot_token", "")
+    platform = msg_data.get("platform", "slack")
 
     config = bots.get(bot_id)
     if not config:
         log.warning("Unknown bot_id: %s", bot_id)
         return
 
-    slack_client = WebClient(token=bot_token)
+    publisher = _get_publisher(msg_data, bots)
 
     try:
         # Persist user message before processing
         store.save_message(bot_id, channel_id, thread_ts, user_id, "user", text)
 
         # Detect if this is an analysis notification thread
-        analysis_issue = _detect_analysis_thread(slack_client, channel_id, thread_ts)
+        analysis_issue = _detect_analysis_thread(publisher, channel_id, thread_ts)
         if analysis_issue:
             log.info("Detected analysis thread for issue #%d", analysis_issue)
 
@@ -833,10 +882,10 @@ def process_message(
 
         final_text = _apply_response_prefix(final_text, config)
 
-        slack_client.chat_postMessage(
-            channel=channel_id,
+        publisher.send_message(
+            channel_id=channel_id,
             text=final_text,
-            thread_ts=thread_ts if thread_ts != message_ts else None,
+            thread_id=thread_ts if thread_ts != message_ts else None,
         )
 
         store.save_message(
@@ -855,18 +904,18 @@ def process_message(
                 log.warning("Memory extraction failed (non-blocking): %s", e)
 
         try:
-            slack_client.reactions_remove(
-                channel=channel_id,
-                name="hourglass_flowing_sand",
-                timestamp=message_ts,
+            publisher.remove_reaction(
+                channel_id=channel_id,
+                message_id=message_ts,
+                emoji="hourglass_flowing_sand",
             )
         except Exception:
             pass
         try:
-            slack_client.reactions_add(
-                channel=channel_id,
-                name="white_check_mark",
-                timestamp=message_ts,
+            publisher.add_reaction(
+                channel_id=channel_id,
+                message_id=message_ts,
+                emoji="white_check_mark",
             )
         except Exception:
             pass
@@ -876,24 +925,26 @@ def process_message(
     except Exception as e:
         log.error("Error processing message: %s", e, exc_info=True)
         try:
-            slack_client.reactions_remove(
-                channel=channel_id,
-                name="hourglass_flowing_sand",
-                timestamp=message_ts,
+            publisher.remove_reaction(
+                channel_id=channel_id,
+                message_id=message_ts,
+                emoji="hourglass_flowing_sand",
             )
         except Exception:
             pass
         try:
-            slack_client.reactions_add(
-                channel=channel_id, name="x", timestamp=message_ts
+            publisher.add_reaction(
+                channel_id=channel_id,
+                message_id=message_ts,
+                emoji="x",
             )
         except Exception:
             pass
         try:
-            slack_client.chat_postMessage(
-                channel=channel_id,
+            publisher.send_message(
+                channel_id=channel_id,
                 text=_user_visible_error_message(e),
-                thread_ts=thread_ts if thread_ts != message_ts else None,
+                thread_id=thread_ts if thread_ts != message_ts else None,
             )
         except Exception:
             pass
