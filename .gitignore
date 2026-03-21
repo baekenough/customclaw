@@ -1,0 +1,32 @@
+# Python
+.env
+__pycache__/
+*.pyc
+.venv/
+
+# Node / Next.js
+node_modules/
+.next/
+
+# web-ui specific
+web-ui/node_modules/
+web-ui/.next/
+web-ui/.env
+web-ui/.env.local
+web-ui/.env.development.local
+web-ui/.env.test.local
+web-ui/.env.production.local
+
+# Claude local config (not for version control)
+.claude/
+.mcp.json
+.omcustom.lock.json
+.omcustomrc.json
+
+# User-specific configurations (use setup.py to generate)
+dags/*.py
+!dags/example_hello_world.py
+bots/*.yaml
+!bots/example.yaml
+/workflows/
+/guides/

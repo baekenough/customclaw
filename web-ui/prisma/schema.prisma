@@ -1,0 +1,115 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime? @map("email_verified")
+  image         String?
+  accounts      Account[]
+
+  @@map("users")
+}
+
+model Account {
+  id                    String  @id @default(cuid())
+  userId                String  @map("user_id")
+  type                  String
+  provider              String
+  providerAccountId     String  @map("provider_account_id")
+  refresh_token         String? @db.Text
+  access_token          String? @db.Text
+  expires_at            Int?
+  token_type            String?
+  scope                 String?
+  id_token              String? @db.Text
+  session_state         String?
+  user                  User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Bot {
+  id             String   @id
+  name           String   @db.VarChar(128)
+  slackAppToken  String   @map("slack_app_token")
+  slackBotToken  String   @map("slack_bot_token")
+  channels       Json     @default("[]")
+  persona        Json     @default("{}")
+  project        Json     @default("{}")
+  airflow        Json?    @default("{}")
+  tools          Json     @default("{}")
+  claude         Json     @default("{}")
+  memory         Json     @default("{}")
+  security       Json     @default("{}")
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz()
+
+  messages     Message[]
+  memories     Memory[]
+  apiUsageLogs ApiUsageLog[]
+
+  @@map("bots")
+}
+
+model Message {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  botId     String   @map("bot_id") @db.VarChar(64)
+  channelId String   @map("channel_id") @db.VarChar(64)
+  threadTs  String?  @map("thread_ts") @db.VarChar(64)
+  userId    String   @map("user_id") @db.VarChar(64)
+  role      String   @db.VarChar(16)
+  content   String
+  timestamp DateTime @default(now()) @db.Timestamptz()
+  metadata  Json     @default("{}")
+
+  bot Bot @relation(fields: [botId], references: [id])
+
+  memories Memory[]
+
+  @@map("messages")
+}
+
+model Memory {
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  botId           String    @map("bot_id") @db.VarChar(64)
+  userId          String?   @map("user_id") @db.VarChar(64)
+  category        String    @db.VarChar(32)
+  content         String
+  sourceMessageId String?   @map("source_message_id") @db.Uuid
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  expiresAt       DateTime? @map("expires_at") @db.Timestamptz()
+  metadata        Json      @default("{}")
+
+  bot           Bot      @relation(fields: [botId], references: [id])
+  sourceMessage Message? @relation(fields: [sourceMessageId], references: [id])
+
+  @@map("memories")
+}
+
+model ApiUsageLog {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  botId        String   @map("bot_id") @db.VarChar(64)
+  userId       String?  @map("user_id") @db.VarChar(64)
+  model        String   @db.VarChar(64)
+  inputTokens  Int      @map("input_tokens")
+  outputTokens Int      @map("output_tokens")
+  costUsd      Decimal? @map("cost_usd") @db.Decimal(10, 6)
+  toolName     String?  @map("tool_name") @db.VarChar(64)
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  bot Bot @relation(fields: [botId], references: [id])
+
+  @@map("api_usage_logs")
+}

@@ -1,0 +1,61 @@
+# CustomClaw Bot Configuration Example
+# Copy this file and rename it to create your own bot.
+# Environment variables use ${VAR_NAME} syntax, resolved at runtime.
+#
+# Usage:
+#   cp bots/example.yaml bots/my-bot.yaml
+#   # Edit the file, then restart: docker compose restart slack-bolt worker
+
+name: example-bot                        # Unique bot ID (kebab-case)
+
+slack:
+  app_token: ${MY_BOT_SLACK_APP_TOKEN}   # Socket Mode token (xapp-...)
+  bot_token: ${MY_BOT_SLACK_BOT_TOKEN}   # Bot OAuth token (xoxb-...)
+  channels: []                            # Restrict to channel IDs (empty = all)
+
+persona:
+  display_name: "Example Bot"
+  description: "An example AI assistant"
+  response_prefix: ""                     # Optional prefix for all responses
+  personality: |
+    You are a helpful AI assistant.
+    Keep responses concise and actionable.
+
+project:
+  repo_path: ""                           # Absolute path to a local repo (for code search tool)
+  github_repo: ""                         # owner/repo for GitHub tools
+  github_token_var: GITHUB_TOKEN          # Environment variable holding the GitHub token
+
+airflow:
+  dag_prefix: ""                          # Filter DAGs by prefix in Airflow tools
+
+claude:
+  provider: claude                        # "claude" or "codex"
+  model: sonnet                           # claude: sonnet/opus/haiku | codex: gpt-5.4
+  max_turns: 10                           # Max agentic turns per message
+  full_agent: false                       # true = Claude Code agent mode (file/shell access)
+
+memory:
+  context_window: 20                      # Recent messages to include in LLM context
+  auto_extract: true                      # Auto-extract long-term memories from conversations
+
+tools:
+  enabled:                                # Available tools for this bot
+    - create_issue                        # Create GitHub issues
+    - query_issues                        # Search/list GitHub issues
+    - get_dag_status                      # Check Airflow DAG status
+    - list_dags                           # List Airflow DAGs
+    - list_dag_runs                       # View DAG run history
+    - trigger_dag                         # Trigger DAG execution
+    - search_code                         # Search codebase via Claude CLI
+    - create_bot                          # Create new bots at runtime
+    - list_bots                           # List registered bots
+    - update_bot                          # Update bot configuration
+    - delete_bot                          # Delete a bot
+
+security:
+  allowed_channels: []                    # Restrict to specific Slack channels (empty = all)
+  allowed_users: []                       # Restrict to specific Slack user IDs (empty = all)
+  dangerous_tools:                        # Tools that show a confirmation prompt
+    - delete_bot
+    - trigger_dag

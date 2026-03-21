@@ -1,0 +1,274 @@
+"""Bot configuration loader. Reads from YAML files (bootstrap) or database."""
+
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import psycopg2
+import yaml
+
+
+@dataclass
+class PersonaConfig:
+    display_name: str = ""
+    description: str = ""
+    personality: str = ""
+    response_prefix: str = ""
+
+
+@dataclass
+class ProjectConfig:
+    repo_path: str = ""
+    github_repo: str = ""
+    github_token_var: str = ""
+
+
+@dataclass
+class AirflowConfig:
+    dag_prefix: str = ""
+
+
+@dataclass
+class ClaudeConfig:
+    provider: str = "claude"  # "claude" or "codex"
+    model: str = "sonnet"
+    max_turns: int = 10
+    full_agent: bool = False
+
+
+@dataclass
+class MemoryConfig:
+    context_window: int = 20
+    auto_extract: bool = True
+
+
+@dataclass
+class SecurityConfig:
+    allowed_channels: list[str] = field(default_factory=list)
+    allowed_users: list[str] = field(default_factory=list)
+    dangerous_tools: list[str] = field(default_factory=list)
+
+
+@dataclass
+class BotConfig:
+    id: str
+    name: str
+    slack_app_token: str
+    slack_bot_token: str
+    channels: list[str] = field(default_factory=list)
+    persona: PersonaConfig = field(default_factory=PersonaConfig)
+    project: ProjectConfig = field(default_factory=ProjectConfig)
+    airflow: AirflowConfig = field(default_factory=AirflowConfig)
+    tools_enabled: list[str] = field(default_factory=list)
+    claude: ClaudeConfig = field(default_factory=ClaudeConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
+
+
+def _resolve_env(value: str) -> str:
+    """Resolve ${ENV_VAR} references in string values."""
+    if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+        env_key = value[2:-1]
+        return os.environ.get(env_key, "")
+    return value
+
+
+def load_bot_from_yaml(path: Path) -> BotConfig:
+    """Load a single bot configuration from a YAML file."""
+    with open(path) as f:
+        data = yaml.safe_load(f)
+
+    slack = data.get("slack", {})
+    persona_data = data.get("persona", {})
+    project_data = data.get("project", {})
+    airflow_data = data.get("airflow", {})
+    claude_data = data.get("claude", {})
+    memory_data = data.get("memory", {})
+    security_data = data.get("security", {})
+    tools_data = data.get("tools", {})
+
+    return BotConfig(
+        id=data["name"],
+        name=data["name"],
+        slack_app_token=_resolve_env(slack.get("app_token", "")),
+        slack_bot_token=_resolve_env(slack.get("bot_token", "")),
+        channels=slack.get("channels", []),
+        persona=PersonaConfig(
+            display_name=persona_data.get("display_name", ""),
+            description=persona_data.get("description", ""),
+            personality=persona_data.get("personality", ""),
+            response_prefix=persona_data.get("response_prefix", ""),
+        ),
+        project=ProjectConfig(
+            repo_path=project_data.get("repo_path", ""),
+            github_repo=project_data.get("github_repo", ""),
+            github_token_var=project_data.get("github_token_var", ""),
+        ),
+        airflow=AirflowConfig(dag_prefix=airflow_data.get("dag_prefix", "")),
+        tools_enabled=tools_data.get("enabled", []),
+        claude=ClaudeConfig(
+            provider=claude_data.get("provider", "claude"),
+            model=claude_data.get("model", "sonnet"),
+            max_turns=claude_data.get("max_turns", 10),
+            full_agent=claude_data.get("full_agent", False),
+        ),
+        memory=MemoryConfig(
+            context_window=memory_data.get("context_window", 20),
+            auto_extract=memory_data.get("auto_extract", True),
+        ),
+        security=SecurityConfig(
+            allowed_channels=security_data.get("allowed_channels", []),
+            allowed_users=security_data.get("allowed_users", []),
+            dangerous_tools=security_data.get("dangerous_tools", []),
+        ),
+    )
+
+
+def _as_dict(value) -> dict:
+    if isinstance(value, dict):
+        return value
+    if not value:
+        return {}
+    if isinstance(value, str):
+        return json.loads(value)
+    return dict(value)
+
+
+def _as_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if not value:
+        return []
+    if isinstance(value, str):
+        return json.loads(value)
+    return list(value)
+
+
+def load_bot_from_db_row(row) -> BotConfig:
+    """Load a single bot configuration from a database row."""
+    (
+        bot_id,
+        name,
+        slack_app_token,
+        slack_bot_token,
+        channels,
+        persona_data,
+        project_data,
+        airflow_data,
+        tools_data,
+        claude_data,
+        memory_data,
+        security_data,
+    ) = row
+
+    persona_data = _as_dict(persona_data)
+    project_data = _as_dict(project_data)
+    airflow_data = _as_dict(airflow_data)
+    tools_data = _as_dict(tools_data)
+    claude_data = _as_dict(claude_data)
+    memory_data = _as_dict(memory_data)
+    security_data = _as_dict(security_data)
+
+    return BotConfig(
+        id=bot_id,
+        name=name,
+        slack_app_token=_resolve_env(slack_app_token or ""),
+        slack_bot_token=_resolve_env(slack_bot_token or ""),
+        channels=_as_list(channels),
+        persona=PersonaConfig(
+            display_name=persona_data.get("display_name", name or bot_id or ""),
+            description=persona_data.get("description", ""),
+            personality=persona_data.get("personality", ""),
+            response_prefix=persona_data.get("response_prefix", ""),
+        ),
+        project=ProjectConfig(
+            repo_path=project_data.get("repo_path", ""),
+            github_repo=project_data.get("github_repo", ""),
+            github_token_var=project_data.get("github_token_var", ""),
+        ),
+        airflow=AirflowConfig(dag_prefix=airflow_data.get("dag_prefix", "")),
+        tools_enabled=_as_list(tools_data.get("enabled", [])),
+        claude=ClaudeConfig(
+            provider=claude_data.get("provider", "claude"),
+            model=claude_data.get("model", "sonnet"),
+            max_turns=claude_data.get("max_turns", 10),
+            full_agent=claude_data.get("full_agent", False),
+        ),
+        memory=MemoryConfig(
+            context_window=memory_data.get("context_window", 20),
+            auto_extract=memory_data.get("auto_extract", True),
+        ),
+        security=SecurityConfig(
+            allowed_channels=_as_list(security_data.get("allowed_channels", [])),
+            allowed_users=_as_list(security_data.get("allowed_users", [])),
+            dangerous_tools=_as_list(security_data.get("dangerous_tools", [])),
+        ),
+    )
+
+
+def load_all_bots_from_db() -> list[BotConfig]:
+    """Load all active bot configurations from PostgreSQL."""
+    dsn = os.environ.get("DATABASE_DSN", "")
+    if not dsn:
+        return []
+
+    conn = psycopg2.connect(dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    name,
+                    slack_app_token,
+                    slack_bot_token,
+                    channels,
+                    persona,
+                    project,
+                    airflow,
+                    tools,
+                    claude,
+                    memory,
+                    security
+                FROM bots
+                WHERE is_active = true
+                ORDER BY created_at, id
+                """
+            )
+            rows = cur.fetchall()
+        return [
+            load_bot_from_db_row(row)
+            for row in rows
+            if row[2] and row[3]
+        ]
+    finally:
+        conn.close()
+
+
+def load_all_bots(bots_dir: str = "/app/bots") -> list[BotConfig]:
+    """Load all bot configurations, preferring PostgreSQL over YAML bootstrap."""
+    configs_by_id: dict[str, BotConfig] = {}
+
+    try:
+        for config in load_all_bots_from_db():
+            configs_by_id[config.id] = config
+    except Exception as e:
+        print(f"[WARNING] Failed to load bot configs from database: {e}")
+
+    bots_path = Path(bots_dir)
+    if bots_path.exists():
+        for yaml_file in sorted(bots_path.glob("*.yaml")):
+            try:
+                config = load_bot_from_yaml(yaml_file)
+                if (
+                    config.id not in configs_by_id
+                    and config.slack_app_token
+                    and config.slack_bot_token
+                ):
+                    configs_by_id[config.id] = config
+            except Exception as e:
+                print(f"[WARNING] Failed to load bot config {yaml_file}: {e}")
+    return list(configs_by_id.values())

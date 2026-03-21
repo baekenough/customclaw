@@ -1,0 +1,175 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+    environment:
+      POSTGRES_DB: customclaw
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  opensearch:
+    build:
+      context: .
+      dockerfile: docker/opensearch/Dockerfile
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_ADMIN_PASSWORD}
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    volumes:
+      - osdata:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${CLAUDE_CLI_BINARY}:${CONTAINER_HOME}/.local/bin/claude:ro
+      - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
+      - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
+    ports:
+      - "8080:8080"
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${DB_USER}:${DB_PASSWORD}@postgres:5432/airflow
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__API__AUTH_BACKEND: airflow.api.auth.backend.default
+      AIRFLOW__SIMPLE_AUTH_MANAGER__USERS: ${AIRFLOW_API_USER}
+      AIRFLOW__SIMPLE_AUTH_MANAGER__PASSWORDS: ${AIRFLOW_API_PASSWORD}
+      AIRFLOW__SIMPLE_AUTH_MANAGER__ALL_ADMINS: "true"
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      HOME: ${CONTAINER_HOME}
+
+  slack-bolt:
+    build:
+      context: .
+      dockerfile: docker/slack-bolt/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./bots:/app/bots
+      - repos:${CONTAINER_HOME}/workspace
+    environment:
+      DATABASE_DSN: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw
+      REDIS_URL: redis://redis:6379
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/slack-bolt/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    volumes:
+      - ./bots:/app/bots
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
+      - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
+      - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
+      - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
+      - ${CODEX_CONFIG_DIR}:${CONTAINER_HOME}/.codex
+    environment:
+      DATABASE_DSN: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw
+      REDIS_URL: redis://redis:6379
+      OPENSEARCH_URL: http://opensearch:9200
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      VOYAGE_API_KEY: ${VOYAGE_API_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      AIRFLOW_API_URL: http://airflow:8080/api/v2
+      AIRFLOW_API_USER: ${AIRFLOW_API_USER}
+      AIRFLOW_API_PASSWORD: ${AIRFLOW_API_PASSWORD}
+      REDIS_CONSUMER_GROUP: customclaw-workers
+      MERGE_WINDOW_SECONDS: "5"
+    command: python -m slack_bot.worker
+
+  git-worker:
+    build:
+      context: .
+      dockerfile: docker/slack-bolt/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - repos:${CONTAINER_HOME}/workspace
+    environment:
+      REDIS_URL: redis://redis:6379
+    command: python -m slack_bot.git_worker
+
+  web-ui:
+    build:
+      context: .
+      dockerfile: docker/web-ui/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID}
+      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET}
+      AIRFLOW_API_URL: http://airflow:8080/api/v2
+      AIRFLOW_API_USER: ${AIRFLOW_API_USER}
+      AIRFLOW_API_PASSWORD: ${AIRFLOW_API_PASSWORD}
+      AUTH_TRUST_HOST: "true"
+
+volumes:
+  pgdata:
+  osdata:
+  redisdata:
+  repos:
