@@ -12,129 +12,11 @@ CustomClaw는 Slack 기반 멀티봇 AI 플랫폼으로, 여러 Slack 봇을 하
 
 ### 2.1 전체 시스템 아키텍처
 
-```mermaid
-graph TB
-    subgraph External["외부"]
-        Slack["Slack\n(Socket Mode)"]
-        GitHub["GitHub API"]
-        CF["Cloudflare Tunnel"]
-    end
-
-    subgraph Frontend["Web UI (Next.js 16, :3000)"]
-        WebUI["Web UI\n(NextAuth + Prisma)"]
-    end
-
-    subgraph SlackBolt["slack-bolt 컨테이너"]
-        BM["BotManager"]
-        BR["BotRunner ×N\n(Socket Mode Handler)"]
-        BM --> BR
-    end
-
-    subgraph WorkerContainer["worker 컨테이너"]
-        Worker["Worker\n(Redis Consumer)"]
-        ClaudeCLI["Claude CLI\n(opus/sonnet/haiku)"]
-        CodexCLI["Codex CLI\n(gpt-5.4)"]
-        ToolReg["ToolRegistry"]
-        AnalysisWorker["Analysis Worker\n(Redis Consumer)"]
-        Worker --> ClaudeCLI
-        Worker --> CodexCLI
-        Worker --> ToolReg
-    end
-
-    subgraph GitWorkerContainer["git-worker 컨테이너"]
-        GitWorker["Git Worker\n(Phase 4 stub)"]
-    end
-
-    subgraph Infra["공유 인프라"]
-        Redis["Redis 7\n(Stream + AOF)"]
-        PG["PostgreSQL 16\n(pgvector)"]
-        OS["OpenSearch\n(nori 한국어 분석기)"]
-    end
-
-    subgraph AirflowContainer["Airflow 컨테이너 (:8080)"]
-        AF["Airflow Scheduler\n+ Webserver"]
-        DAG1["omc_issue_analyzer"]
-        DAG2["claude_code_release_monitor"]
-        DAG3["gpt_codex_release_monitor"]
-        DAG4["omc_codebase_indexer"]
-        DAG5["omc_feedback_collector"]
-        DAG6["omc_pr_analyzer"]
-        AF --> DAG1
-        AF --> DAG2
-        AF --> DAG3
-        AF --> DAG4
-        AF --> DAG5
-        AF --> DAG6
-    end
-
-    Slack <-->|"Socket Mode WSS"| BR
-    BR -->|"xadd customclaw:slack-messages"| Redis
-    Redis -->|"xreadgroup"| Worker
-    Worker -->|"save_message / get_recent"| PG
-    Worker -->|"index / search"| OS
-    ClaudeCLI -->|"tool 결과 → GitHub"| ToolReg
-    ToolReg -->|"HTTP"| GitHub
-    ToolReg -->|"HTTP"| AirflowContainer
-    DAG1 -->|"Claude CLI subprocess"| ClaudeCLI
-    DAG2 -->|"Claude CLI subprocess"| ClaudeCLI
-    DAG1 -->|"GitHub REST API"| GitHub
-    DAG2 -->|"GitHub REST API"| GitHub
-    GitWorker -->|"xreadgroup (future)"| Redis
-    WebUI -->|"Prisma ORM"| PG
-    WebUI -->|"airflowFetch proxy"| AirflowContainer
-    WebUI -->|"Health check"| Redis
-    WebUI -->|"Health check"| OS
-    CF -->|"HTTPS → :3000"| WebUI
-```
+<p align="center"><img src="../assets/diagrams/01-system-architecture.png" width="800" /></p>
 
 ### 2.2 메시지 처리 흐름 (Sequence)
 
-```mermaid
-sequenceDiagram
-    participant User as Slack 사용자
-    participant BR as BotRunner
-    participant Redis as Redis Stream
-    participant Worker as Worker
-    participant Claude as Claude CLI
-    participant Tool as ToolRegistry
-    participant PG as PostgreSQL
-    participant OS as OpenSearch
-
-    User->>BR: Slack 메시지 전송
-    BR->>BR: 채널·사용자 권한 검증
-    BR->>User: ⏳ hourglass 리액션 추가
-    BR->>Redis: xadd (customclaw:slack-messages)
-
-    Redis->>Worker: xreadgroup (block=5000ms)
-    Worker->>PG: save_message (user)
-    Worker->>PG: get_recent_messages (context window)
-    Worker->>OS: HybridSearch.search() (top_k=5)
-
-    alt limited mode (JSON tool_call)
-        Worker->>Claude: Phase 1 prompt\n(system + memory + tools + history + text)
-        Claude-->>Worker: 응답 (tool_call JSON 포함 가능)
-        opt tool_call 감지
-            Worker->>Tool: execute(tool_name, args)
-            Tool-->>Worker: tool_result
-            Worker->>Claude: Phase 2 prompt\n(original + tool_result)
-            Claude-->>Worker: 최종 응답
-        end
-    else full_agent mode
-        Worker->>Claude: 단일 prompt (all-in-one)
-        Claude-->>Worker: 최종 응답
-    else codex provider
-        Worker->>Codex: codex exec (dangerously-bypass-approvals)
-        Codex-->>Worker: 최종 응답
-    end
-
-    Worker->>User: chat_postMessage (thread)
-    Worker->>PG: save_message (assistant)
-    Worker->>Claude: extract_and_store (haiku, 비동기)
-    Claude-->>OS: index_memory
-    Claude-->>PG: INSERT memories
-    Worker->>User: ✅ hourglass 제거 + check_mark 추가
-    Worker->>Redis: xack
-```
+<p align="center"><img src="../assets/diagrams/02-message-sequence.png" width="800" /></p>
 
 ---
 
@@ -150,16 +32,7 @@ sequenceDiagram
 - 검증을 통과한 메시지를 `customclaw:slack-messages` Redis Stream에 `xadd`합니다.
 - 처리 중 ⏳ 리액션을 추가해 사용자에게 진행 상황을 알립니다.
 
-```mermaid
-graph LR
-    YAML["/app/bots/*.yaml"] --> BM[BotManager]
-    BM --> BR1["BotRunner (bot-A)"]
-    BM --> BR2["BotRunner (bot-B)"]
-    BR1 -->|"thread"| SM1["SocketModeHandler"]
-    BR2 -->|"thread"| SM2["SocketModeHandler"]
-    SM1 --> Redis
-    SM2 --> Redis
-```
+<p align="center"><img src="../assets/diagrams/03-worker-consumer.png" width="800" /></p>
 
 ### 3.2 Worker (worker.py)
 
@@ -187,25 +60,7 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 
 ### 3.4 메모리 시스템
 
-```mermaid
-graph TB
-    subgraph Extract["자동 추출 (비동기)"]
-        Conv["대화 6개 메시지"] --> Ext["MemoryExtractor\n(Claude haiku)"]
-        Ext -->|"JSON 파싱"| Mem["메모리 항목\n(fact/decision/preference)"]
-    end
-
-    subgraph Store["저장"]
-        Mem --> PG2["PostgreSQL\n(memories 테이블\n+ pgvector 1024차원)"]
-        Mem --> OSIdx["OpenSearch\n(customclaw-memories 인덱스\nnori 한국어 분석기)"]
-    end
-
-    subgraph Search["하이브리드 검색"]
-        Query["사용자 메시지"] --> KW["키워드 검색\n(OpenSearch nori)"]
-        KW --> Results["top_k=5 결과"]
-    end
-
-    Results -->|"memory_context"| Prompt["프롬프트 주입"]
-```
+<p align="center"><img src="../assets/diagrams/04-memory-extraction.png" width="800" /></p>
 
 **현재 구현 상태:**
 - OpenSearch nori 키워드 검색은 완전 구현되어 있습니다.

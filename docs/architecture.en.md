@@ -14,25 +14,7 @@ CustomClaw is a multi-tenant Slack bot platform that routes user messages throug
 
 ### 2.1 End-to-End Message Flow
 
-```mermaid
-flowchart TD
-    Slack([Slack Workspace]) -->|Socket Mode / WebSocket| SB[slack-bolt\nBotManager]
-    SB -->|xadd customclaw:slack-messages| RS[(Redis Stream)]
-    RS -->|xreadgroup consumer group| W[Worker\nprocess_message]
-
-    W -->|provider=claude| CL[Claude CLI\nclaude -p prompt\n--model opus/sonnet/haiku]
-    W -->|provider=codex| CX[Codex CLI\ncodex exec prompt\n-m gpt-5.4]
-
-    CL -->|JSON tool_call block| TC{Tool call\ndetected?}
-    CX -->|plain text| FR[Final Reply]
-
-    TC -->|yes — Phase 1| TR[ToolRegistry\nexecute tool]
-    TR -->|tool result| PH2[Phase 2 prompt\n→ Claude CLI]
-    PH2 --> FR
-    TC -->|no| FR
-
-    FR -->|chat_postMessage| Slack
-```
+<p align="center"><img src="../assets/diagrams/02-message-sequence.png" width="800" /></p>
 
 ### 2.2 Worker ↔ Data Stores
 
@@ -165,42 +147,7 @@ flowchart TD
 
 ### 2.6 Full Service Topology
 
-```mermaid
-flowchart TB
-    subgraph External
-        SLK([Slack])
-        GH([GitHub])
-        ANT([Anthropic API])
-        OAI([OpenAI API])
-        CF([Cloudflare Tunnel])
-    end
-
-    subgraph Docker Compose Network
-        SB[slack-bolt\nBotManager]
-        W[worker]
-        GW[git-worker]
-        AF[airflow :8080]
-        WUI[web-ui :3000]
-        PG[(postgres :5432\npgvector/pg16)]
-        RD[(redis :6379)]
-        OS[(opensearch :9200)]
-    end
-
-    SLK <-->|Socket Mode| SB
-    SB -->|xadd| RD
-    W -->|xreadgroup| RD
-    W --> PG
-    W --> OS
-    W -->|subprocess| ANT
-    W -->|subprocess| OAI
-    GW -->|xreadgroup| RD
-    AF --> PG
-    WUI --> PG
-    WUI --> AF
-    CF -->|:3000| WUI
-    GH <-->|DAG tasks| AF
-    ANT <-->|Claude CLI| AF
-```
+<p align="center"><img src="../assets/diagrams/01-system-architecture.png" width="800" /></p>
 
 ---
 
@@ -220,17 +167,7 @@ flowchart TB
 - Adds an `hourglass_flowing_sand` emoji reaction to the source message.
 - Publishes the event (bot_id, channel_id, thread_ts, user_id, text, message_ts, bot_token) to Redis Stream key `customclaw:slack-messages` via `xadd`.
 
-```mermaid
-sequenceDiagram
-    participant Slack
-    participant BotRunner
-    participant Redis
-
-    Slack->>BotRunner: message event (Socket Mode)
-    BotRunner->>BotRunner: security filter (channel / user)
-    BotRunner->>Slack: reactions_add hourglass
-    BotRunner->>Redis: xadd customclaw:slack-messages
-```
+<p align="center"><img src="../assets/diagrams/03-worker-consumer.png" width="800" /></p>
 
 ### 3.2 Worker (`worker.py`)
 
@@ -283,18 +220,7 @@ Currently a Phase 4 stub for general async git operations. The worker subscribes
 
 ### 3.4 Memory System
 
-```mermaid
-flowchart LR
-    CONV[Conversation\nMessages] --> EXT[MemoryExtractor\nClaude haiku --max-turns 1]
-    EXT -->|JSON array| PG_MEM[(memories table\npgvector 1024-dim)]
-    EXT -->|index_memory| OS_MEM[(OpenSearch\ncustomclaw-memories\nnori analyzer)]
-
-    QUERY[User message] --> HS[HybridSearch]
-    HS -->|keyword match| OS_MEM
-    OS_MEM -->|top-k results| HS
-    HS -->|planned: RRF merge| PG_MEM
-    HS --> PROMPT[Memory context\nin prompt]
-```
+<p align="center"><img src="../assets/diagrams/04-memory-extraction.png" width="800" /></p>
 
 **Extraction pipeline:**
 

@@ -311,28 +311,7 @@ docker compose up -d --build
 
 ## Architecture Overview
 
-```
-Slack (Socket Mode)
-       │
-       ▼
-  slack-bolt container
-  (BotRunner per bot)
-       │  publishes to
-       ▼
-  Redis Stream: customclaw:slack-messages
-       │
-       ├──► worker container  ──► Claude CLI / Codex CLI
-       │         │
-       │         ├──► PostgreSQL (messages, memories)
-       │         ├──► OpenSearch (full-text memory index)
-       │         └──► Slack API (post response)
-       │
-       ├──► git-worker container  ──► Git operations
-       │
-       └──► analysis worker   ──► Claude CLI (PR analysis)
-                  │
-                  └──► Slack API (threaded notifications)
-```
+<p align="center"><img src="assets/diagrams/01-system-architecture.png" width="800" /></p>
 
 ---
 

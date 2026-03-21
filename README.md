@@ -133,29 +133,7 @@ customclaw/
 
 ## 아키텍처
 
-```
-Slack (Socket Mode)
-      │
-      ▼
- slack-bolt          Redis Stream
-  (app.py)  ──────►  customclaw:slack-messages
-                              │
-                              ▼
-                         worker.py
-                    (Consumer Group)
-                              │
-                    ┌─────────┴──────────┐
-                    │                    │
-               Claude Code CLI      Codex CLI
-               (Anthropic)          (OpenAI)
-                    │                    │
-                    └─────────┬──────────┘
-                              │
-                    ┌─────────┴─────────┐
-                    │                   │
-                pgvector           OpenSearch
-                (벡터 검색)         (전문 검색)
-```
+<p align="center"><img src="assets/diagrams/01-system-architecture.png" width="800" /></p>
 
 1. `slack-bolt` — Slack Socket Mode로 메시지 수신, Redis Stream에 발행
 2. `worker` — Redis Consumer Group으로 메시지 소비, 봇 설정에 따라 Claude CLI 또는 Codex CLI 실행
