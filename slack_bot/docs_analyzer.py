@@ -37,7 +37,7 @@ _HOME_DIR = os.environ.get("HOME", "/home/appuser")
 _CLI_MODEL_INFO: dict[str, str] = {
     "claude": "Claude Opus 4",
     "codex": "GPT-5.4",
-    "gemini": "Gemini 2.5 Pro",
+    "gemini": "Gemini 3.0 Pro",
 }
 
 _AGENTNAV_DOC_URLS: dict[str, str] = {
@@ -87,7 +87,7 @@ def _build_command(cli: str) -> list[str]:
     if cli == "codex":
         return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-m", "gpt-5.4"]
     if cli == "gemini":
-        return ["gemini", "--model", "gemini-2.5-pro", "--yolo"]
+        return ["gemini", "--model", "gemini-3.0-pro", "--yolo"]
     raise ValueError(f"Unknown CLI: {cli!r}")
 
 
@@ -206,6 +206,16 @@ def _build_analysis_prompt(
         f"공식 문서(`{source_name}`)에서 변경이 감지되었습니다. "
         f"AgentNav이 제공하는 파싱 문서와 비교하여 동기화 상태를 분석해주세요.\n\n"
         f"---\n\n"
+        f"## 데이터 형식 안내\n\n"
+        f"아래 diff 데이터는 llms.txt에서 추출되었으며, 여러 유형의 항목이 혼재합니다:\n"
+        f"- `## 헤딩` — 문서 **섹션 헤더** (개별 페이지가 아님)\n"
+        f"- `- [제목](경로): 설명` — 실제 **개별 페이지 항목**\n"
+        f"- 코드 스니펫, 설정값, 파일 경로 등 — 기존 페이지 내부 **콘텐츠 변경**\n\n"
+        f"**중요**: 섹션 헤더와 콘텐츠 조각을 독립 페이지로 오인하지 마세요. "
+        f"AgentNav agents.md의 `- [title](path)` 형식과 1:1 매칭하여 분석하세요.\n\n"
+        f"AgentNav agents.md에는 문서의 URL, 총 페이지 수, 섹션 구조가 명시되어 있습니다. "
+        f"공식 문서의 소스 URL과 AgentNav이 추적하는 URL이 동일한지도 반드시 확인하세요.\n\n"
+        f"---\n\n"
         f"## 1. 공식 문서 변경사항 (llms.txt diff)\n\n"
         f"### 추가된 항목\n<added>\n{added_lines or '(없음)'}\n</added>\n\n"
         f"### 제거된 항목\n<removed>\n{removed_lines or '(없음)'}\n</removed>\n\n"
@@ -216,20 +226,22 @@ def _build_analysis_prompt(
         f"---\n\n"
         f"## 분석 요청\n\n"
         f"위 두 자료를 1:1 비교하여 다음을 한국어로 분석해주세요:\n\n"
-        f"### 1. 동기화 상태 진단\n"
-        f"- 공식 문서에 추가된 페이지/섹션 중 AgentNav에 **아직 없는 것** 목록\n"
-        f"- 공식 문서에서 제거된 페이지/섹션 중 AgentNav에 **아직 남아있는 것** 목록\n"
-        f"- 공식 문서에서 경로/제목이 변경된 것 중 AgentNav이 **구버전을 참조하는 것** 목록\n\n"
-        f"### 2. 영향도 평가\n"
-        f"- 누락/불일치 항목이 AgentNav 사용자에게 미치는 영향\n"
+        f"### 1. 구조적 검증\n"
+        f"- AgentNav agents.md의 소스 URL과 diff의 출처 URL이 일치하는가?\n"
+        f"- 불일치하면 근본 원인을 먼저 보고하세요 (잘못된 소스 추적 등)\n\n"
+        f"### 2. 동기화 상태 진단\n"
+        f"- 공식 문서에 추가된 **페이지** 중 AgentNav에 아직 없는 것 (섹션 헤더, 콘텐츠 조각 제외)\n"
+        f"- 공식 문서에서 제거된 **페이지** 중 AgentNav에 아직 남아있는 것\n"
+        f"- 경로/제목이 변경된 것 중 AgentNav이 구버전을 참조하는 것\n\n"
+        f"### 3. 영향도 평가\n"
         f"- 잘못된 정보를 제공할 위험이 있는 항목 (높은 우선순위)\n"
         f"- 단순 추가가 필요한 항목 (낮은 우선순위)\n\n"
-        f"### 3. 구체적 액션 아이템\n"
+        f"### 4. 구체적 액션 아이템\n"
         f"각 항목을 테이블로 정리:\n"
         f"| # | 유형 | 항목 | 현재 상태 | 필요한 조치 | 우선순위 |\n"
         f"|---|------|------|----------|-----------|----------|\n\n"
-        f"### 4. 전체 요약\n"
-        f"- 동기화율: AgentNav이 공식 문서의 몇 %를 반영하고 있는가\n"
+        f"### 5. 전체 요약\n"
+        f"- 동기화율: AgentNav이 공식 문서의 몇 %를 반영하고 있는가 (페이지 단위 기준)\n"
         f"- 전체 우선순위: **높음** / **중간** / **낮음** + 근거\n\n"
         f"참고 이슈: {issue_url}"
     )
