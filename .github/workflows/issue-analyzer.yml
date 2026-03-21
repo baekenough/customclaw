@@ -14,6 +14,7 @@ jobs:
           AIRFLOW_API_USER: ${{ secrets.AIRFLOW_API_USER }}
           AIRFLOW_API_PASSWORD: ${{ secrets.AIRFLOW_API_PASSWORD }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
@@ -41,7 +42,7 @@ jobs:
             -d "{
               \"dag_run_id\": \"opened_${ISSUE_NUMBER}_$(date +%s)\",
               \"logical_date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
-              \"conf\": {\"issue_number\": ${ISSUE_NUMBER}},
+              \"conf\": {\"issue_number\": ${ISSUE_NUMBER}, \"repo\": \"${REPO}\"},
               \"note\": \"Triggered by issue #${ISSUE_NUMBER} opened event\"
             }")
           HTTP_CODE=$(echo "${RESPONSE}" | tail -n1)
