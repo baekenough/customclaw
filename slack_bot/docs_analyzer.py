@@ -36,7 +36,7 @@ _HOME_DIR = os.environ.get("HOME", "/home/appuser")
 # Model info displayed in GitHub comment per CLI
 _CLI_MODEL_INFO: dict[str, str] = {
     "claude": "Claude Opus 4",
-    "codex": "o3",
+    "codex": "GPT-5.4",
     "gemini": "Gemini 3.0 Pro",
 }
 
@@ -85,7 +85,7 @@ def _build_command(cli: str) -> list[str]:
     if cli == "claude":
         return ["claude", "--model", "sonnet", "--max-turns", "5"]
     if cli == "codex":
-        return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-m", "o3", "-c", "reasoning.effort=\"high\"", "-c", "reasoning.summary=\"auto\""]
+        return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-m", "gpt-5.4"]
     if cli == "gemini":
         return ["gemini", "--model", "gemini-3-pro-preview", "--yolo"]
     raise ValueError(f"Unknown CLI: {cli!r}")
@@ -215,6 +215,12 @@ def _build_analysis_prompt(
         f"AgentNav agents.md의 `- [title](path)` 형식과 1:1 매칭하여 분석하세요.\n\n"
         f"AgentNav agents.md에는 문서의 URL, 총 페이지 수, 섹션 구조가 명시되어 있습니다. "
         f"공식 문서의 소스 URL과 AgentNav이 추적하는 URL이 동일한지도 반드시 확인하세요.\n\n"
+        f"\n## 분석 가이드라인\n\n"
+        f"- **섹션 헤더도 무시하지 마세요**: `## 헤딩`이 페이지는 아니지만, AgentNav agents.md의 "
+        f"섹션 구조(`## Section Name`)와 1:1 매핑하여 **섹션 네이밍 불일치**를 식별하세요.\n"
+        f"- **합리적 추론 수행**: diff 데이터가 불완전해도(잘린 항목 등), 가진 데이터로 "
+        f"최대한 유의미한 결론을 도출하세요. '확정 불가'보다 '~일 가능성이 높음(근거: ...)'을 선호합니다.\n"
+        f"- **간결하게**: 각 섹션은 핵심만 서술하고, 동일한 내용을 반복하지 마세요.\n"
         f"---\n\n"
         f"## 1. 공식 문서 변경사항 (llms.txt diff)\n\n"
         f"### 추가된 항목\n<added>\n{added_lines or '(없음)'}\n</added>\n\n"
