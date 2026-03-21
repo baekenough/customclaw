@@ -303,8 +303,34 @@ cloudflared tunnel run customclaw
 
 ```bash
 git pull origin develop
-docker compose build
+docker compose pull
 docker compose up -d
+```
+
+### 자동 업데이트
+
+customclaw는 Watchtower를 통해 핵심 엔진을 자동으로 업데이트합니다. 자동 업데이트를 활성화하려면 `setup.py`에서 옵션을 선택하거나, `.env`에 `COMPOSE_PROFILES=auto-update`를 추가하세요.
+
+- **자동 모드**: Watchtower가 매일 새벽 4시에 새 이미지를 확인하고 자동 업데이트
+- **수동 모드**: `docker compose pull && docker compose up -d`
+- **사용자 설정(`bots/`, `.env`)은 업데이트 영향을 받지 않습니다**
+
+#### 버전 고정
+
+자동 업데이트 대신 특정 버전을 사용하려면:
+
+```yaml
+# docker-compose.yml에서 latest 대신 버전 태그 지정
+image: ghcr.io/baekenough/customclaw-slack-bolt:v1.2.3
+```
+
+#### 개발 모드
+
+소스 코드를 직접 수정하며 개발하려면:
+
+```bash
+cp docker-compose.override.yml.example docker-compose.override.yml
+docker compose up -d --build
 ```
 
 ---

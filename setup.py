@@ -8,6 +8,7 @@ Usage:
 
 import getpass
 import secrets
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -131,6 +132,12 @@ def write_env(path: Path, values: dict[str, str]) -> None:
         ("Security", [
             ("ENCRYPTION_KEY", values.get("ENCRYPTION_KEY", "")),
         ]),
+        ("Auto Update", [
+            ("COMPOSE_PROFILES",
+             values.get("COMPOSE_PROFILES", "")),
+            ("WATCHTOWER_SCHEDULE",
+             values.get("WATCHTOWER_SCHEDULE", "0 0 4 * * *")),
+        ]),
         ("Host Paths (adjust to your system)", [
             ("HOST_WORKSPACE_PATH",
              expand(values.get("HOST_WORKSPACE_PATH", "~/workspace"))),
@@ -151,7 +158,10 @@ def write_env(path: Path, values: dict[str, str]) -> None:
     for section_name, pairs in sections:
         lines.append(f"# ─── {section_name} {'─' * max(0, 44 - len(section_name))}")
         for key, value in pairs:
-            lines.append(f"{key}={value}")
+            if value:
+                lines.append(f"{key}={value}")
+            else:
+                lines.append(f"# {key}=")
         lines.append("")
 
     path.write_text("\n".join(lines))
@@ -314,7 +324,54 @@ def setup_env() -> dict[str, str]:
     return values
 
 
-# ── Step 2: Bot creation ────────────────────────────────────────────────────
+# ── Step 2: Deployment options ──────────────────────────────────────────────
+
+
+def setup_deployment(env_values: dict[str, str]) -> dict[str, str]:
+    """Interactively configure deployment mode and auto-update. Returns updated env values."""
+    print_step(2, "Deployment Options")
+
+    # ── Deployment mode ──
+    print(bold("  [Deployment Mode]"))
+    print("    1) Production (pre-built images from GHCR, recommended)")
+    print("    2) Development (local build from source)")
+    deploy_mode = input("  Select deployment mode [1]: ").strip() or "1"
+
+    if deploy_mode == "2":
+        override_example = Path("docker-compose.override.yml.example")
+        override_target = Path("docker-compose.override.yml")
+        if override_example.exists():
+            shutil.copy(override_example, override_target)
+            print(f"  {green('✓')} Created docker-compose.override.yml (local build mode)")
+        else:
+            print(f"  {yellow('⚠')} docker-compose.override.yml.example not found, skipping.")
+    else:
+        print(f"  {green('✓')} Production mode selected (using pre-built images)")
+
+    # ── Auto-update ──
+    print(bold("\n  [Auto-Update]"))
+    auto_update = prompt_yn("Enable auto-update via Watchtower?", default=False)
+    if auto_update:
+        env_values["WATCHTOWER_SCHEDULE"] = "0 0 4 * * *"
+        env_values["COMPOSE_PROFILES"] = "auto-update"
+        print(f"  {green('✓')} Auto-update enabled (daily at 4 AM)")
+    else:
+        env_values["WATCHTOWER_SCHEDULE"] = ""
+        env_values["COMPOSE_PROFILES"] = ""
+        print(
+            f"  {cyan('ℹ')} Auto-update disabled. "
+            f"Run {cyan('docker compose pull && docker compose up -d')} to update manually."
+        )
+
+    # Re-write .env with updated values
+    env_path = Path(".env")
+    if env_path.exists():
+        write_env(env_path, env_values)
+
+    return env_values
+
+
+# ── Step 3: Bot creation ────────────────────────────────────────────────────
 
 _BOT_YAML_TEMPLATE = """\
 name: {name}
@@ -362,7 +419,7 @@ security:
 
 def create_bot(env_values: dict[str, str]) -> None:
     """Interactively create a bot YAML file under bots/."""
-    print_step(2, "First Bot Creation")
+    print_step(3, "First Bot Creation")
 
     if not prompt_yn("Create your first bot?", default=True):
         print(f"  {yellow('Skipping bot creation.')}")
@@ -412,11 +469,11 @@ def create_bot(env_values: dict[str, str]) -> None:
     print(f"  {green('✓')} dags/ directory ready: {dags_dir.resolve()}")
 
 
-# ── Step 3: Launch ──────────────────────────────────────────────────────────
+# ── Step 4: Launch ──────────────────────────────────────────────────────────
 
 def launch_services() -> None:
     """Optionally run docker compose up -d."""
-    print_step(3, "Launch Services")
+    print_step(4, "Launch Services")
 
     if not prompt_yn("Run 'docker compose up -d' now?", default=True):
         print(f"  {yellow('Skipping launch.')}")
@@ -459,6 +516,8 @@ def main() -> None:
         env_path = Path(".env")
         if env_path.exists():
             created.append(str(env_path.resolve()))
+
+        env_values = setup_deployment(env_values)
 
         create_bot(env_values)
         bots_dir = Path("bots")

@@ -125,6 +125,20 @@ Airflow: scheduled DAGs (release monitoring, codebase indexing, etc.)
 Web UI (Next.js): http://localhost:3000 — dashboard, bot management, monitoring
 ```
 
+## Container Registry & Auto-update
+
+| Aspect | Detail |
+|--------|--------|
+| Registry | GHCR (`ghcr.io/baekenough/customclaw-*`) |
+| Image naming | `customclaw-slack-bolt` (shared by slack-bolt, worker, git-worker), `customclaw-web-ui`, `customclaw-airflow`, `customclaw-opensearch` |
+| Auto-update | Watchtower (nickfedor/watchtower fork) checks for new images daily at 4:00 AM |
+| Override pattern | `docker-compose.override.yml` for local development (build from source) |
+
+- Production containers pull pre-built images from GHCR
+- User data (`bots/`, `.env`, `dags/`) is volume-mounted and unaffected by image updates
+- To pin a version: replace `latest` tag with a specific version (e.g., `v1.2.3`) in `docker-compose.yml`
+- For local development: copy `docker-compose.override.yml.example` to `docker-compose.override.yml` to build from source instead of pulling GHCR images
+
 ## Services
 
 | Service | Port | Purpose |

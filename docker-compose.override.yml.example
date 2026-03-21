@@ -1,0 +1,38 @@
+# Development mode: local build instead of GHCR images
+# Usage: cp docker-compose.override.yml.example docker-compose.override.yml
+# Docker Compose automatically merges override file with docker-compose.yml
+#
+# IMPORTANT: When using development mode, stop Watchtower to prevent
+# it from overwriting your local builds with GHCR images:
+#   docker compose stop watchtower
+
+services:
+  slack-bolt:
+    build:
+      context: .
+      dockerfile: docker/slack-bolt/Dockerfile
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/slack-bolt/Dockerfile
+
+  git-worker:
+    build:
+      context: .
+      dockerfile: docker/slack-bolt/Dockerfile
+
+  web-ui:
+    build:
+      context: .
+      dockerfile: docker/web-ui/Dockerfile
+
+  airflow:
+    build:
+      context: .
+      dockerfile: docker/airflow/Dockerfile
+
+  opensearch:
+    build:
+      context: docker/opensearch
+      dockerfile: Dockerfile

@@ -17,6 +17,9 @@ web-ui/.env.development.local
 web-ui/.env.test.local
 web-ui/.env.production.local
 
+# Docker overrides (local build mode)
+docker-compose.override.yml
+
 # Claude local config (not for version control)
 .claude/
 .mcp.json

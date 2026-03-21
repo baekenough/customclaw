@@ -18,9 +18,7 @@ services:
       - "5432:5432"
 
   opensearch:
-    build:
-      context: .
-      dockerfile: docker/opensearch/Dockerfile
+    image: ghcr.io/baekenough/customclaw-opensearch:latest
     restart: unless-stopped
     environment:
       - discovery.type=single-node
@@ -49,10 +47,11 @@ services:
       retries: 5
 
   airflow:
-    build:
-      context: .
-      dockerfile: docker/airflow/Dockerfile
+    image: ghcr.io/baekenough/customclaw-airflow:latest
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=customclaw"
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,10 +77,12 @@ services:
       HOME: ${CONTAINER_HOME}
 
   slack-bolt:
-    build:
-      context: .
-      dockerfile: docker/slack-bolt/Dockerfile
+    image: ghcr.io/baekenough/customclaw-slack-bolt:latest
     restart: unless-stopped
+    stop_grace_period: 120s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=customclaw"
     env_file: .env
     depends_on:
       postgres:
@@ -97,10 +98,12 @@ services:
       ENCRYPTION_KEY: ${ENCRYPTION_KEY}
 
   worker:
-    build:
-      context: .
-      dockerfile: docker/slack-bolt/Dockerfile
+    image: ghcr.io/baekenough/customclaw-slack-bolt:latest
     restart: unless-stopped
+    stop_grace_period: 120s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=customclaw"
     env_file: .env
     depends_on:
       postgres:
@@ -132,10 +135,12 @@ services:
     command: python -m slack_bot.worker
 
   git-worker:
-    build:
-      context: .
-      dockerfile: docker/slack-bolt/Dockerfile
+    image: ghcr.io/baekenough/customclaw-slack-bolt:latest
     restart: unless-stopped
+    stop_grace_period: 120s
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=customclaw"
     depends_on:
       redis:
         condition: service_healthy
@@ -146,10 +151,11 @@ services:
     command: python -m slack_bot.git_worker
 
   web-ui:
-    build:
-      context: .
-      dockerfile: docker/web-ui/Dockerfile
+    image: ghcr.io/baekenough/customclaw-web-ui:latest
     restart: unless-stopped
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+      - "com.centurylinklabs.watchtower.scope=customclaw"
     depends_on:
       postgres:
         condition: service_healthy
@@ -167,6 +173,23 @@ services:
       AIRFLOW_API_USER: ${AIRFLOW_API_USER}
       AIRFLOW_API_PASSWORD: ${AIRFLOW_API_PASSWORD}
       AUTH_TRUST_HOST: "true"
+
+  watchtower:
+    image: nickfedor/watchtower
+    container_name: customclaw-watchtower
+    profiles:
+      - auto-update
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_SCHEDULE: "${WATCHTOWER_SCHEDULE:-0 0 4 * * *}"
+      WATCHTOWER_SCOPE: "customclaw"
+      WATCHTOWER_ROLLING_RESTART: "true"
+    labels:
+      - "com.centurylinklabs.watchtower.scope=customclaw"
 
 volumes:
   pgdata:
