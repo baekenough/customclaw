@@ -87,7 +87,7 @@ def _build_command(cli: str) -> list[str]:
     if cli == "codex":
         return ["codex", "exec", "--full-auto", "--skip-git-repo-check", "-m", "gpt-5.4"]
     if cli == "gemini":
-        return ["gemini", "-p", "-", "--model", "gemini-2.5-pro", "--yolo"]
+        return ["gemini", "--model", "gemini-2.5-pro", "--yolo"]
     raise ValueError(f"Unknown CLI: {cli!r}")
 
 
