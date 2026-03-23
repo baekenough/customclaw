@@ -393,28 +393,17 @@ def _run_codex_cli(
        ``--output-format json`` flag (or equivalent) so that token usage can
        be captured and logged via ``_log_usage``.
     """
-    prompt_file = None
     timeout = 600  # 10 min max
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write(prompt)
-            prompt_file = f.name
-
-        cmd = (
-            f"NO_COLOR=1 HOME={os.environ.get('CONTAINER_HOME', '/home/appuser')} "
-            f"{CODEX_CLI_PATH} exec "
-            f"\"$(cat {prompt_file})\" "
-            f"-m {model} "
-            f"--dangerously-bypass-approvals-and-sandbox"
-        )
+        env = {**os.environ, "HOME": os.environ.get("CONTAINER_HOME", "/home/appuser"), "NO_COLOR": "1"}
         result = subprocess.run(
-            cmd,
-            shell=True,
+            [CODEX_CLI_PATH, "exec", prompt, "-m", model, "--dangerously-bypass-approvals-and-sandbox"],
             capture_output=True,
             text=True,
             timeout=timeout,
             stdin=subprocess.DEVNULL,
             cwd=cwd,
+            env=env,
         )
 
         if result.returncode != 0:
@@ -463,9 +452,6 @@ def _run_codex_cli(
     except Exception as e:
         log.error("Unexpected error running %s: %s", _provider_label("codex"), e)
         return None
-    finally:
-        if prompt_file and os.path.exists(prompt_file):
-            os.unlink(prompt_file)
 
 
 def _extract_tool_call(text: str) -> dict | None:
