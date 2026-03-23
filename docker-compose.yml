@@ -143,22 +143,6 @@ services:
       CREDENTIAL_ALERT_CHANNEL: ${CREDENTIAL_ALERT_CHANNEL:-C0AMBNY135Z}
     command: python -m bot_engine.worker
 
-  git-worker:
-    image: ghcr.io/baekenough/customclaw-slack-bolt:latest
-    restart: unless-stopped
-    stop_grace_period: 120s
-    labels:
-      - "com.centurylinklabs.watchtower.enable=true"
-      - "com.centurylinklabs.watchtower.scope=customclaw"
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - repos:${CONTAINER_HOME}/workspace
-    environment:
-      REDIS_URL: redis://redis:6379
-    command: python -m bot_engine.git_worker
-
   web-ui:
     image: ghcr.io/baekenough/customclaw-web-ui:latest
     restart: unless-stopped

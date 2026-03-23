@@ -40,27 +40,15 @@ flowchart LR
     MEM -.->|pgvector HNSW\nfuture| W
 ```
 
-### 2.3 Git Worker (Redis Stream)
-
-```mermaid
-flowchart LR
-    W[Worker / other producers] -->|xadd customclaw:git-ops| GS[(Redis Stream\ncustomclaw:git-ops)]
-    GS -->|xreadgroup| GW[git-worker\nPhase 4 stub]
-    GW -->|git clone / push / PR| GH([GitHub API])
-    GW -->|operate on| REPO[shared workspace volume]
-```
-
-> **Note:** git-worker is currently a stub pending Phase 4 implementation. The Redis stream infrastructure is in place.
-
-### 2.4 Airflow DAG Processing
+### 2.3 Airflow DAG Processing
 
 <p align="center"><img src="../assets/diagrams/08-dag-pipeline.png" width="800" /></p>
 
-### 2.5 Web UI
+### 2.4 Web UI
 
 <p align="center"><img src="../assets/diagrams/07-web-ui.png" width="800" /></p>
 
-### 2.6 Full Service Topology
+### 2.5 Full Service Topology
 
 <p align="center"><img src="../assets/diagrams/01-system-architecture.png" width="800" /></p>
 
@@ -136,13 +124,7 @@ sequenceDiagram
 
 **Post-processing**: after sending the reply, `MemoryExtractor.extract_and_store` is called asynchronously (best-effort, non-blocking) to mine facts, decisions, and preferences from the conversation.
 
-### 3.3 Git Worker (`git_worker.py`)
-
-Currently a Phase 4 stub for general async git operations. The worker subscribes to a Redis Stream for git operation events. Full implementation will handle `git clone`, `git push`, branch management, and PR creation via GitHub API, operating on the `repos` shared volume.
-
-> **Note:** The `worker` container image now includes `git` and the `gh` CLI, which are required by the `omcustom-driver` auto-development pipeline (see section 3.9).
-
-### 3.4 Memory System
+### 3.3 Memory System
 
 <p align="center"><img src="../assets/diagrams/04-memory-extraction.png" width="800" /></p>
 
@@ -161,7 +143,7 @@ Currently a Phase 4 stub for general async git operations. The worker subscribes
 
 **Memory categories:** `fact`, `decision`, `preference`
 
-### 3.5 Tool System
+### 3.4 Tool System
 
 <p align="center"><img src="../assets/diagrams/05-tool-class.png" width="800" /></p>
 
@@ -176,7 +158,7 @@ Tools are passed to Claude via formatted prompt text (not native Anthropic tool-
 
 Per-bot tool access is controlled by `tools.enabled` in the bot YAML config.
 
-### 3.6 Bot Configuration (`config/loader.py`)
+### 3.5 Bot Configuration (`config/loader.py`)
 
 Bot configurations are loaded from YAML files in `/app/bots/`. Each file maps to a `BotConfig` dataclass with the following sections:
 
@@ -194,7 +176,7 @@ Bot configurations are loaded from YAML files in `/app/bots/`. Each file maps to
 
 Environment variable references in the form `${VAR_NAME}` are resolved at load time.
 
-### 3.7 Web UI (`web-ui/`)
+### 3.6 Web UI (`web-ui/`)
 
 Built with Next.js 16 (App Router), TypeScript, and Prisma ORM.
 
@@ -215,7 +197,7 @@ Built with Next.js 16 (App Router), TypeScript, and Prisma ORM.
 | `/api/usage` | GET | API token usage summary |
 | `/api/health` | GET | Service health (PostgreSQL, Redis, OpenSearch, Airflow) |
 
-### 3.8 Airflow DAGs
+### 3.7 Airflow DAGs
 
 **`omc_issue_analyzer`** — 4-Phase Analysis Pipeline
 
@@ -298,7 +280,7 @@ Scheduled DAG (`0 */3 * * *` — every 3 hours) that polls official documentatio
 
 Minimal example DAG included for Airflow connectivity testing.
 
-### 3.9 omcustom-driver (Auto-Development Agent)
+### 3.8 omcustom-driver (Auto-Development Agent)
 
 The `omcustom-driver` is an autonomous development agent that activates only when the Professor approves a GitHub issue for automated development.
 
@@ -321,7 +303,7 @@ The `omcustom-driver` is an autonomous development agent that activates only whe
 
 The analysis consumer uses `xautoclaim` recovery to reclaim unacknowledged messages after a configurable idle timeout, preventing message loss when the consumer restarts.
 
-### 3.10 Analysis Worker (`analysis_worker.py`)
+### 3.9 Analysis Worker (`analysis_worker.py`)
 
 A dedicated Redis Stream consumer that processes PR analysis and issue analysis requests independently from the main message worker.
 
@@ -343,7 +325,7 @@ A dedicated Redis Stream consumer that processes PR analysis and issue analysis 
 - Redis distributed lock (`SET NX EX`, 15-min TTL) prevents duplicate analysis of same PR
 - Slack message threading keeps analysis updates organized per PR
 
-### 3.11 Process Management (`supervisor.py` / `runtime_control.py`)
+### 3.10 Process Management (`supervisor.py` / `runtime_control.py`)
 
 `supervisor.py` is a process supervisor that manages worker/app restarts. `runtime_control.py` provides Redis-based helpers for safe self-restart requests.
 
@@ -358,7 +340,7 @@ A dedicated Redis Stream consumer that processes PR analysis and issue analysis 
 - `CUSTOMCLAW_SUPERVISED` environment variable indicates supervised mode
 - `CUSTOMCLAW_RUNTIME_TARGET` specifies which module to supervise
 
-### 3.12 GitHub Actions Workflows (`workflows/`)
+### 3.11 GitHub Actions Workflows (`workflows/`)
 
 | Workflow | File | Trigger | Description |
 |----------|------|---------|-------------|
@@ -522,14 +504,13 @@ Token usage tracking per bot invocation.
 | `airflow` | `customclaw-airflow` | 8080 | `dags/`, workspace | DAG scheduler + webserver |
 | `slack-bolt` | `customclaw-slack-bolt` | — | `bots/`, `repos` | Platform adapter event ingestion (Slack / Discord) |
 | `worker` | `customclaw-slack-bolt` | — | `bots/`, `repos`, Claude/Codex auth | AI response processing |
-| `git-worker` | `customclaw-slack-bolt` | — | `repos` | Git operations (Phase 4 stub) |
 | `web-ui` | `customclaw-web-ui` | 3000 | — | Management web interface |
 | `claude-analyzer` | `customclaw-slack-bolt` | — | Claude auth, workspace | Docs drift analysis — Claude CLI sonnet |
 | `codex-analyzer` | `customclaw-slack-bolt` | — | Codex auth, workspace | Docs drift analysis — Codex CLI gpt-5.4 |
 | `gemini-analyzer` | `customclaw-slack-bolt` | — | Gemini auth, workspace | Docs drift analysis — Gemini CLI 3 Pro Preview |
 | `watchtower` | `nickfedor/watchtower` | — | Docker socket | Optional auto-update (profile: `auto-update`) |
 
-Total: 12 services (11 always-on + 1 optional profile)
+Total: 11 services (10 always-on + 1 optional profile)
 
 The three analyzer services (`claude-analyzer`, `codex-analyzer`, `gemini-analyzer`) consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `agentnav_issue_analyzer` DAG. Each runs `bot_engine.docs_analyzer` with a different CLI backend.
 
@@ -540,7 +521,7 @@ The three analyzer services (`claude-analyzer`, `codex-analyzer`, `gemini-analyz
 | `pgdata` | postgres | PostgreSQL data files |
 | `osdata` | opensearch | OpenSearch index data |
 | `redisdata` | redis | Redis AOF persistence |
-| `repos` | airflow, slack-bolt, worker, git-worker | Cloned git repositories (shared) |
+| `repos` | airflow, slack-bolt, worker | Cloned git repositories (shared) |
 
 ### 6.3 Host Bind Mounts (Worker)
 

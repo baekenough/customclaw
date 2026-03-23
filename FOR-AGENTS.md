@@ -279,7 +279,7 @@ Web UI (Next.js): http://localhost:3000 — dashboard, bot management, monitorin
 | Aspect | Detail |
 |--------|--------|
 | Registry | GHCR (`ghcr.io/baekenough/customclaw-*`) |
-| Image naming | `customclaw-slack-bolt` (shared by slack-bolt, worker, git-worker), `customclaw-web-ui`, `customclaw-airflow`, `customclaw-opensearch` |
+| Image naming | `customclaw-slack-bolt` (shared by slack-bolt, worker), `customclaw-web-ui`, `customclaw-airflow`, `customclaw-opensearch` |
 | Auto-update | Watchtower (nickfedor/watchtower fork) checks for new images daily at 4:00 AM |
 | Override pattern | `docker-compose.override.yml` for local development (build from source) |
 
@@ -298,7 +298,6 @@ Web UI (Next.js): http://localhost:3000 — dashboard, bot management, monitorin
 | `airflow` | 8080 | DAG orchestration |
 | `slack-bolt` | — | Slack event listener |
 | `worker` | — | Message processor (Claude/Codex CLI) |
-| `git-worker` | — | Async git operations |
 | `web-ui` | 3000 | Dashboard |
 
 ## Common Operations

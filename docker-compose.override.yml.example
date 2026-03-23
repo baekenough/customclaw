@@ -17,11 +17,6 @@ services:
       context: .
       dockerfile: docker/slack-bolt/Dockerfile
 
-  git-worker:
-    build:
-      context: .
-      dockerfile: docker/slack-bolt/Dockerfile
-
   web-ui:
     build:
       context: .

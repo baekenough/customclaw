@@ -133,7 +133,7 @@ customclaw/
 ├── docker/
 │   ├── airflow/              # Airflow Dockerfile + entrypoint
 │   ├── opensearch/           # OpenSearch image with nori plugin
-│   ├── slack-bolt/           # Shared image: slack-bolt, worker, git-worker
+│   ├── slack-bolt/           # Shared image: slack-bolt, worker
 │   └── web-ui/               # Next.js image
 ├── migrations/               # PostgreSQL migration SQL files (applied in order)
 ├── slack_bot/
@@ -143,7 +143,6 @@ customclaw/
 │   ├── docs_analyzer.py      # Documentation drift analysis consumer
 │   ├── supervisor.py         # Process supervisor (restart-on-exit-75)
 │   ├── runtime_control.py    # Redis-based restart signaling helpers
-│   ├── git_worker.py         # Git operations consumer (Phase 4 stub)
 │   ├── bot_runner.py         # Slack-specific message handler
 │   ├── config/
 │   │   └── loader.py         # YAML → BotConfig dataclass loader

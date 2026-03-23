@@ -114,7 +114,6 @@ customclaw/
 │   ├── analysis_worker.py       # Dedicated analysis Redis Stream consumer
 │   ├── supervisor.py            # Process supervisor for managed restarts
 │   ├── runtime_control.py       # Runtime control helpers (Redis-based restart)
-│   ├── git_worker.py            # Redis Stream consumer — handles async Git operations
 │   ├── bot_runner.py            # Per-bot Slack event handler and stream producer
 │   ├── config/
 │   │   └── loader.py            # YAML bot config loader (BotConfig dataclass)
