@@ -9,8 +9,8 @@ import os
 import psycopg2
 import redis
 
-from slack_bot.runtime_control import request_restart
-from slack_bot.tools.base import BaseTool, ToolDefinition, ToolResult
+from bot_engine.runtime_control import request_restart
+from bot_engine.tools.base import BaseTool, ToolDefinition, ToolResult
 
 log = logging.getLogger(__name__)
 

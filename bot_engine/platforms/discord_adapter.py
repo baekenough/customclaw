@@ -19,7 +19,7 @@ from typing import Any
 import redis
 import requests
 
-from slack_bot.platforms.base import PlatformAdapter, ResponsePublisher
+from bot_engine.platforms.base import PlatformAdapter, ResponsePublisher
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ class DiscordAdapter(PlatformAdapter):
     and are distinguished by their configured allowed channels.
 
     Args:
-        configs: List of :class:`~slack_bot.config.loader.BotConfig`
+        configs: List of :class:`~bot_engine.config.loader.BotConfig`
             instances for Discord bots.
         redis_client: Connected Redis client used to publish messages.
     """
@@ -344,7 +344,7 @@ class DiscordAdapter(PlatformAdapter):
             channel_id: Discord channel snowflake ID string.
 
         Returns:
-            Matching :class:`~slack_bot.config.loader.BotConfig`, or
+            Matching :class:`~bot_engine.config.loader.BotConfig`, or
             ``None`` if the channel should be ignored.
         """
         if channel_id in self._channel_map:
