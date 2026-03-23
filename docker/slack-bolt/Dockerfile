@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Configure git identity for omcustom-driver commits (appuser)
 RUN su -c 'git config --global user.name "omcustom-driver" && git config --global user.email "omcustom-driver@noreply.github.com"' appuser
 
-RUN npm install -g @openai/codex@latest
+RUN ln -sf /usr/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
 
 WORKDIR /app
 COPY requirements.txt .

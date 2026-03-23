@@ -119,6 +119,7 @@ services:
       - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
       - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
       - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
+      - ${CODEX_PKG_DIR}:/usr/lib/node_modules/@openai/codex:ro
       - ${CODEX_CONFIG_DIR}:${CONTAINER_HOME}/.codex
     environment:
       DATABASE_DSN: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw
@@ -214,6 +215,7 @@ services:
         condition: service_healthy
     volumes:
       - ${CODEX_CONFIG_DIR}:${CONTAINER_HOME}/.codex
+      - ${CODEX_PKG_DIR}:/usr/lib/node_modules/@openai/codex:ro
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
     environment:
       REDIS_URL: redis://redis:6379
