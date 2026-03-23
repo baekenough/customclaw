@@ -7,7 +7,6 @@ import logging
 import os
 import re
 import subprocess
-import tempfile
 import uuid
 
 import psycopg2
@@ -197,22 +196,19 @@ class MemoryExtractor:
 
         Returns raw output string or None on failure.
         """
-        prompt_file = None
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".txt", delete=False
-            ) as f:
-                f.write(prompt)
-                prompt_file = f.name
-
-            cmd = (
-                f"NO_COLOR=1 HOME={os.environ.get('CONTAINER_HOME', '/home/appuser')} "
-                f"{CLAUDE_CLI_PATH} -p \"$(cat {prompt_file})\" "
-                f"--model haiku --max-turns 1"
-            )
+            env = {
+                **os.environ,
+                "HOME": os.environ.get("CONTAINER_HOME", "/home/appuser"),
+                "NO_COLOR": "1",
+            }
             result = subprocess.run(
-                cmd,
-                shell=True,
+                [
+                    CLAUDE_CLI_PATH, "-p", prompt,
+                    "--model", "haiku",
+                    "--max-turns", "1",
+                ],
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -224,9 +220,6 @@ class MemoryExtractor:
         except Exception as e:
             log.warning("Claude CLI extraction failed: %s", e)
             return None
-        finally:
-            if prompt_file and os.path.exists(prompt_file):
-                os.unlink(prompt_file)
 
     def _parse_extraction(self, text: str) -> list[dict]:
         """Parse JSON array from Claude's response.

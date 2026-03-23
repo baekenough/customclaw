@@ -7,7 +7,6 @@ import os
 import re
 import socket
 import subprocess
-import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -602,29 +601,35 @@ def _run_analysis(
     model = "opus"
     max_turns = "30"
 
-    prompt_file = None
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write(prompt)
-            prompt_file = f.name
-
         # Use repo_path if it exists, else fall back to /tmp
         cwd = repo_path if os.path.isdir(repo_path) else "/tmp"
 
         # Pull latest code before analysis to avoid stale code issues
-        pull_cmd = f"cd {cwd} && git pull --ff-only origin main 2>/dev/null || true"
-        subprocess.run(pull_cmd, shell=True, capture_output=True, timeout=30)
+        try:
+            subprocess.run(
+                ["git", "-C", cwd, "pull", "--ff-only", "origin", "main"],
+                capture_output=True,
+                timeout=30,
+            )
+        except Exception:
+            pass  # Best-effort pull, don't block analysis
 
-        cmd = (
-            f"NO_COLOR=1 HOME={os.environ.get('CONTAINER_HOME', '/home/appuser')} "
-            f"{CLAUDE_CLI_PATH} -p \"$(cat {prompt_file})\" "
-            f"--model {model} --max-turns {max_turns} "
-            f"--allowedTools {allowed_tools}"
-        )
+        env = {
+            **os.environ,
+            "HOME": os.environ.get("CONTAINER_HOME", "/home/appuser"),
+            "NO_COLOR": "1",
+        }
+        args = [
+            CLAUDE_CLI_PATH, "-p", prompt,
+            "--model", model,
+            "--max-turns", str(max_turns),
+            "--allowedTools", allowed_tools,
+        ]
 
         result = subprocess.run(
-            cmd,
-            shell=True,
+            args,
+            env=env,
             capture_output=True,
             text=True,
             timeout=600,  # 10 min max
@@ -659,9 +664,6 @@ def _run_analysis(
     except Exception as e:
         log.error("Analysis error for #%s (%s): %s", issue_number, analysis_type, e)
         return None
-    finally:
-        if prompt_file and os.path.exists(prompt_file):
-            os.unlink(prompt_file)
 
 
 def _post_github_comment(repo: str, issue_number: str, body: str) -> bool:

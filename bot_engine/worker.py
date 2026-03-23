@@ -11,7 +11,6 @@ import re
 import socket
 import sys
 import subprocess
-import tempfile
 import threading
 import time
 
@@ -338,13 +337,8 @@ def _run_claude_cli(
 
     Returns ``(None, None)`` on timeout, non-zero exit code, or empty output.
     """
-    prompt_file = None
     timeout = 180  # default; overridden based on mode below
     try:
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-            f.write(prompt)
-            prompt_file = f.name
-
         model_map = {
             "opus": "opus",
             "sonnet": "sonnet",
@@ -352,29 +346,28 @@ def _run_claude_cli(
         }
         cli_model = model_map.get(model, model)
 
+        env = {
+            **os.environ,
+            "HOME": os.environ.get("CONTAINER_HOME", "/home/appuser"),
+            "NO_COLOR": "1",
+        }
+
+        base_args = [
+            CLAUDE_CLI_PATH, "-p", prompt,
+            "--model", cli_model,
+            "--max-turns", str(max_turns),
+            "--output-format", "json",
+        ]
+
         if full_agent:
-            # Full agent mode: high turns, all built-in tools available
-            cmd = (
-                f"NO_COLOR=1 HOME={os.environ.get('CONTAINER_HOME', '/home/appuser')} "
-                f"{CLAUDE_CLI_PATH} -p \"$(cat {prompt_file})\" "
-                f"--model {cli_model} --max-turns {max_turns} "
-                f"--output-format json "
-                f"--dangerously-skip-permissions"
-            )
-            timeout = max_turns * 60  # 1 min per turn
+            base_args.append("--dangerously-skip-permissions")
+            timeout = max_turns * 60
         else:
-            # Limited prompt mode
-            cmd = (
-                f"NO_COLOR=1 HOME={os.environ.get('CONTAINER_HOME', '/home/appuser')} "
-                f"{CLAUDE_CLI_PATH} -p \"$(cat {prompt_file})\" "
-                f"--model {cli_model} --max-turns {max_turns} "
-                f"--output-format json"
-            )
             timeout = 180
 
         result = subprocess.run(
-            cmd,
-            shell=True,
+            base_args,
+            env=env,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -405,9 +398,6 @@ def _run_claude_cli(
     except Exception as e:
         log.error("Unexpected error running %s: %s", _provider_label("claude"), e)
         return None, None
-    finally:
-        if prompt_file and os.path.exists(prompt_file):
-            os.unlink(prompt_file)
 
 
 def _run_codex_cli(
@@ -518,6 +508,10 @@ def _execute_tool(
     tool = registry.get(tool_name)
     if not tool:
         return f"Unknown tool: {tool_name}"
+
+    # Enforce dangerous_tools restriction
+    if tool_name in (config.security.dangerous_tools or []):
+        return f"Tool '{tool_name}' is restricted by bot security configuration"
 
     extra: dict = {}
     if tool_name in ("create_issue", "query_issues"):
@@ -1270,9 +1264,10 @@ def main():
 
     # Verify Claude CLI availability at startup
     try:
+        env = {**os.environ, "HOME": os.environ.get("CONTAINER_HOME", "/home/appuser")}
         check = subprocess.run(
-            f"HOME={os.environ.get('CONTAINER_HOME', '/home/appuser')} {CLAUDE_CLI_PATH} --version",
-            shell=True,
+            [CLAUDE_CLI_PATH, "--version"],
+            env=env,
             capture_output=True,
             text=True,
             timeout=10,
@@ -1285,8 +1280,7 @@ def main():
     # Verify Codex CLI availability
     try:
         check = subprocess.run(
-            f"{CODEX_CLI_PATH} --version",
-            shell=True,
+            [CODEX_CLI_PATH, "--version"],
             capture_output=True,
             text=True,
             timeout=10,
