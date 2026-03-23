@@ -6,7 +6,7 @@
 
 ## 1. System Overview
 
-CustomClaw is a multi-tenant Slack bot platform that routes user messages through a Redis Stream pipeline to a worker that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using the nori Korean analyzer for keyword retrieval. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages six autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, and PR analysis.
+CustomClaw is a multi-tenant bot platform that routes user messages through a Redis Stream pipeline to a worker that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Platform adapters support Slack (Socket Mode), Discord, and Mattermost. Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using the nori Korean analyzer for keyword retrieval. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages nine autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, PR analysis, AgentNav issue analysis, documentation drift monitoring, and an example hello-world DAG.
 
 ---
 
@@ -54,96 +54,11 @@ flowchart LR
 
 ### 2.4 Airflow DAG Processing
 
-```mermaid
-flowchart TD
-    GHA([GitHub Actions\nwebhook]) -->|SSH trigger| AF[Airflow Scheduler]
-    GHA2([GitHub Actions\nissue-comment-reeval.yml]) -->|re-trigger on needs-input reply| AF
-
-    subgraph DAG1 [omc_issue_analyzer — 4-Phase Pipeline]
-        T1[fetch_issue_details] --> T2[determine_analysis_depth]
-        T3[sync_repo] --> T2
-
-        %% Phase 1: parallel analysis
-        T2 --> T4[analyze_architect\nClaude CLI opus]
-        T2 --> T5[analyze_colleague\nClaude CLI opus]
-
-        %% Phase 2: Professor synthesis
-        T4 --> T6[professor_synthesize\ncombines both analyses]
-        T5 --> T6
-
-        %% Phase 3: Professor decision
-        T6 --> T7[professor_decide\nauto-dev or needs-input]
-
-        %% Phase 4: omcustom-driver auto-development
-        T7 -->|auto-dev approved| T8[omcustom_driver\nbranch → implement → PR]
-        T7 -->|needs-input| T9[post_needs_input_comment\nGitHub comment + label]
-    end
-
-    subgraph DAG2 [claude_code_release_monitor]
-        R1[fetch_releases\nGitHub API] --> R2[filter_new_releases]
-        R2 --> R3[create_issues\nGitHub API]
-        R3 --> R4[analyze_issues\nClaude CLI]
-    end
-
-    GHA3([GitHub Actions\nPR webhook]) -->|SSH trigger| AF
-
-    subgraph DAG3 [gpt_codex_release_monitor]
-        G1[fetch_releases\nopenai/codex] --> G2[filter_new_releases]
-        G2 --> G3[create_issues\nGitHub API]
-        G3 --> G4[analyze_issues\nClaude CLI]
-        G2 --> G5[update_codex]
-    end
-
-    subgraph DAG4 [omc_codebase_indexer]
-        X1[scan_files] --> X2[index_codebase\nOpenSearch]
-    end
-
-    subgraph DAG5 [omc_feedback_collector]
-        F1[validate_feedback] --> F2[create_github_issue]
-    end
-
-    subgraph DAG6 [omc_pr_analyzer]
-        P1[fetch_pr_details] --> P2[determine_analysis_scope]
-        P2 --> P3[request_worker_analysis\nRedis Stream]
-    end
-
-    AF --> DAG1
-    AF --> DAG2
-    AF --> DAG3
-    AF --> DAG4
-    AF --> DAG5
-    AF --> DAG6
-
-    DAG1 -->|reads| OMCR[owner/your-repo\nlocal clone]
-    DAG2 -->|watches| CCR[anthropics/claude-code\nreleases API]
-```
+<p align="center"><img src="../assets/diagrams/08-dag-pipeline.png" width="800" /></p>
 
 ### 2.5 Web UI
 
-```mermaid
-flowchart TD
-    Browser([Browser]) -->|HTTPS via Cloudflare Tunnel| WUI[Next.js 16\nweb-ui :3000]
-
-    WUI -->|NextAuth GitHub OAuth| GHO([GitHub OAuth])
-    WUI -->|Prisma ORM| PG[(PostgreSQL)]
-    WUI -->|Bearer token proxy| AFAPI[Airflow REST API v2\n:8080]
-    WUI -->|TCP health check| RD[(Redis :6379)]
-    WUI -->|HTTP health check| OS2[OpenSearch :9200]
-
-    subgraph API Routes
-        AR1[/api/bots\nCRUD]
-        AR2[/api/airflow/dags\nDAG list + runs]
-        AR3[/api/messages\nconversation history]
-        AR4[/api/usage\ntoken usage]
-        AR5[/api/health\nservice health]
-    end
-
-    WUI --> AR1
-    WUI --> AR2
-    WUI --> AR3
-    WUI --> AR4
-    WUI --> AR5
-```
+<p align="center"><img src="../assets/diagrams/07-web-ui.png" width="800" /></p>
 
 ### 2.6 Full Service Topology
 
@@ -153,17 +68,26 @@ flowchart TD
 
 ## 3. Component Details
 
-### 3.1 slack-bolt (`app.py` / `bot_runner.py`)
+### 3.1 Platform Adapters (`app.py` / `bot_runner.py`)
 
 `BotManager` is the entry point. On startup it:
 
 1. Calls `load_all_bots(bots_dir)` to read all `*.yaml` files from `/app/bots/`.
-2. Instantiates one `BotRunner` per config, each holding its own `slack_bolt.App` and `WebClient`.
-3. Starts each `SocketModeHandler` in a dedicated daemon thread.
+2. Instantiates one platform-specific runner per config (Slack `BotRunner`, Discord adapter, or Mattermost adapter).
+3. Starts each handler in a dedicated daemon thread.
 
-`BotRunner` registers a single `message` event handler. For each eligible message it:
+Three platform adapters are supported:
+
+| Platform | Adapter | Connection Mode |
+|----------|---------|----------------|
+| Slack | `BotRunner` + `slack_bolt.App` | Socket Mode (WebSocket) |
+| Discord | `DiscordAdapter` | Discord Gateway (WebSocket) |
+| Mattermost | — | WebSocket event stream |
+
+The Slack `BotRunner` registers a single `message` event handler. For each eligible message it:
 
 - Filters by `allowed_channels` and `allowed_users` from `SecurityConfig`.
+- Supports `mention_only` mode (Discord bots: only respond when @mentioned).
 - Adds an `hourglass_flowing_sand` emoji reaction to the source message.
 - Publishes the event (bot_id, channel_id, thread_ts, user_id, text, message_ts, bot_token) to Redis Stream key `customclaw:slack-messages` via `xadd`.
 
@@ -239,31 +163,7 @@ Currently a Phase 4 stub for general async git operations. The worker subscribes
 
 ### 3.5 Tool System
 
-```mermaid
-classDiagram
-    class BaseTool {
-        +definition() ToolDefinition
-        +execute(**kwargs) ToolResult
-    }
-    class ToolRegistry {
-        -_tools: dict
-        +register(tool)
-        +get(name) BaseTool
-        +get_definitions(enabled) list
-    }
-    BaseTool <|-- CreateIssueTool
-    BaseTool <|-- QueryIssuesTool
-    BaseTool <|-- GetDagStatusTool
-    BaseTool <|-- ListDagRunsTool
-    BaseTool <|-- ListDagsTool
-    BaseTool <|-- TriggerDagTool
-    BaseTool <|-- SearchCodeTool
-    BaseTool <|-- CreateBotTool
-    BaseTool <|-- ListBotsTool
-    BaseTool <|-- UpdateBotTool
-    BaseTool <|-- DeleteBotTool
-    ToolRegistry --> BaseTool
-```
+<p align="center"><img src="../assets/diagrams/05-tool-class.png" width="800" /></p>
 
 Tools are passed to Claude via formatted prompt text (not native Anthropic tool-use API). Claude outputs a ````json {"tool_call": {"name": ..., "arguments": {...}}}` block which the worker parses with `_extract_tool_call`. Tool categories:
 
@@ -272,7 +172,7 @@ Tools are passed to Claude via formatted prompt text (not native Anthropic tool-
 | GitHub | `create_issue`, `query_issues` |
 | Airflow | `get_dag_status`, `list_dag_runs`, `list_dags`, `trigger_dag` |
 | Code | `search_code` (invokes Claude CLI on the local repo) |
-| Bot Management | `create_bot`, `list_bots`, `update_bot`, `delete_bot` |
+| Bot Management | `create_bot`, `list_bots`, `update_bot`, `delete_bot`, `restart_runtime` |
 
 Per-bot tool access is controlled by `tools.enabled` in the bot YAML config.
 
@@ -287,8 +187,10 @@ Bot configurations are loaded from YAML files in `/app/bots/`. Each file maps to
 | `project` | `repo_path`, `github_repo`, `github_token_var` |
 | `claude` | `provider` (claude/codex), `model`, `max_turns`, `full_agent` |
 | `memory` | `context_window`, `auto_extract` |
-| `security` | `allowed_channels`, `allowed_users`, `dangerous_tools` |
+| `security` | `allowed_channels`, `allowed_users`, `dangerous_tools`, `mention_only` |
 | `tools` | `enabled` (list of allowed tool names) |
+
+`mention_only: true` in the `security` section is supported by the Discord adapter — the bot will only respond to messages that @mention it.
 
 Environment variable references in the form `${VAR_NAME}` are resolved at load time.
 
@@ -370,6 +272,31 @@ Triggered via GitHub Actions webhook (SSH) when a PR is opened, synchronized, or
 | Fetch | `fetch_pr_details` | Retrieves PR metadata, files changed, and diff from GitHub API |
 | Scope | `determine_analysis_scope` | Classifies PR as small/medium/large and sets max analysis turns |
 | Publish | `request_worker_analysis` | Acquires Redis dedup lock; publishes to `customclaw:analysis-requests` stream |
+
+**`agentnav_issue_analyzer`**
+
+Event-driven DAG triggered by the `docs_drift_monitor` DAG (or manually). Receives a GitHub issue describing which documentation sources changed, identifies the relevant source types (claude-code, codex, gemini-cli), and publishes per-source analysis requests to dedicated Redis Streams for the corresponding analyzer containers to consume.
+
+| Phase | Tasks | Description |
+|-------|-------|-------------|
+| Fetch | `fetch_issue_details` | Retrieves GitHub issue body describing changed doc sources |
+| Identify | `identify_sources` | Parses issue to determine affected sources (claude-code / codex / gemini-cli) |
+| Publish | `publish_analysis_requests` | Publishes to `customclaw:claude-analysis`, `customclaw:codex-analysis`, or `customclaw:gemini-analysis` Redis Streams |
+
+**`docs_drift_monitor`**
+
+Scheduled DAG (`0 */3 * * *` — every 3 hours) that polls official documentation for Claude Code, Codex, and Gemini CLI via their `llms.txt` endpoints. Compares content against stored Airflow Variable baselines and creates a consolidated GitHub issue (labeled `docs-drift`) when changes are detected. Triggers `agentnav_issue_analyzer` automatically for downstream deep analysis.
+
+| Phase | Tasks | Description |
+|-------|-------|-------------|
+| Fetch | `fetch_doc_indexes` | Downloads `llms.txt` from each documentation source |
+| Detect | `detect_changes` | Diffs current content against Variable-stored baseline |
+| Report | `create_issue_if_needed` | Creates GitHub issue with `docs-drift` label when changes found |
+| Analyze | `trigger_analysis` | Triggers `agentnav_issue_analyzer` DAG for deep analysis |
+
+**`example_hello_world`**
+
+Minimal example DAG included for Airflow connectivity testing.
 
 ### 3.9 omcustom-driver (Auto-Development Agent)
 
@@ -579,48 +506,7 @@ Token usage tracking per bot invocation.
 
 ### 5.5 Entity Relationships
 
-```mermaid
-erDiagram
-    bots ||--o{ messages : "bot_id"
-    bots ||--o{ memories : "bot_id"
-    bots ||--o{ api_usage_logs : "bot_id"
-    messages ||--o{ memories : "source_message_id"
-
-    bots {
-        varchar id PK
-        text slack_app_token
-        text slack_bot_token
-        jsonb persona
-        jsonb claude
-        jsonb security
-        boolean is_active
-    }
-    messages {
-        uuid id PK
-        varchar bot_id FK
-        varchar channel_id
-        varchar thread_ts
-        varchar role
-        text content
-        vector embedding
-    }
-    memories {
-        uuid id PK
-        varchar bot_id FK
-        varchar category
-        text content
-        vector embedding
-        uuid source_message_id FK
-    }
-    api_usage_logs {
-        uuid id PK
-        varchar bot_id FK
-        varchar model
-        int input_tokens
-        int output_tokens
-        numeric cost_usd
-    }
-```
+<p align="center"><img src="../assets/diagrams/09-er-diagram.png" width="800" /></p>
 
 ---
 
@@ -628,16 +514,24 @@ erDiagram
 
 ### 6.1 Docker Compose Service Map
 
-| Service | Image / Dockerfile | Ports | Volumes | Purpose |
-|---------|-------------------|-------|---------|---------|
+| Service | Image | Ports | Volumes | Purpose |
+|---------|-------|-------|---------|---------|
 | `postgres` | `pgvector/pgvector:pg16` | 5432 | `pgdata`, `migrations/` | Primary datastore |
-| `opensearch` | `docker/opensearch/Dockerfile` | — | `osdata` | Korean keyword search |
+| `opensearch` | `customclaw-opensearch` | — | `osdata` | Korean keyword search |
 | `redis` | `redis:7-alpine` | — | `redisdata` | Message queue (AOF) |
-| `airflow` | `docker/airflow/Dockerfile` | 8080 | `dags/`, `repos` | DAG scheduler + webserver |
-| `slack-bolt` | `docker/slack-bolt/Dockerfile` | — | `bots/`, `repos` | Socket Mode event ingestion |
-| `worker` | `docker/slack-bolt/Dockerfile` | — | `bots/`, `repos`, Claude/Codex auth | AI response processing |
-| `git-worker` | `docker/slack-bolt/Dockerfile` | — | `repos` | Git operations (Phase 4 stub) |
-| `web-ui` | `docker/web-ui/Dockerfile` | 3000 | — | Management web interface |
+| `airflow` | `customclaw-airflow` | 8080 | `dags/`, workspace | DAG scheduler + webserver |
+| `slack-bolt` | `customclaw-slack-bolt` | — | `bots/`, `repos` | Platform adapter event ingestion (Slack / Discord) |
+| `worker` | `customclaw-slack-bolt` | — | `bots/`, `repos`, Claude/Codex auth | AI response processing |
+| `git-worker` | `customclaw-slack-bolt` | — | `repos` | Git operations (Phase 4 stub) |
+| `web-ui` | `customclaw-web-ui` | 3000 | — | Management web interface |
+| `claude-analyzer` | `customclaw-slack-bolt` | — | Claude auth, workspace | Docs drift analysis — Claude CLI sonnet |
+| `codex-analyzer` | `customclaw-slack-bolt` | — | Codex auth, workspace | Docs drift analysis — Codex CLI gpt-5.4 |
+| `gemini-analyzer` | `customclaw-slack-bolt` | — | Gemini auth, workspace | Docs drift analysis — Gemini CLI 3 Pro Preview |
+| `watchtower` | `nickfedor/watchtower` | — | Docker socket | Optional auto-update (profile: `auto-update`) |
+
+Total: 12 services (11 always-on + 1 optional profile)
+
+The three analyzer services (`claude-analyzer`, `codex-analyzer`, `gemini-analyzer`) consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `agentnav_issue_analyzer` DAG. Each runs `slack_bot.docs_analyzer` with a different CLI backend.
 
 ### 6.2 Named Volumes
 
@@ -689,26 +583,7 @@ Selected environment variables required across services:
 
 ## 7. Deployment Architecture
 
-```mermaid
-flowchart TB
-    Internet([Internet]) --> CF[Cloudflare Tunnel\ncloudflared]
-    CF -->|HTTP :3000| WUI[web-ui container]
-
-    HM[Host Machine\nLinux] --> DC[Docker Compose]
-    DC --> SB[slack-bolt]
-    DC --> W[worker]
-    DC --> GW[git-worker]
-    DC --> AF[airflow :8080]
-    DC --> PG[postgres :5432]
-    DC --> RD[redis :6379]
-    DC --> OS[opensearch :9200]
-    DC --> WUI
-
-    SB <-->|WSS| SLKAPI([api.slack.com\nSocket Mode])
-    AF <-->|HTTPS| GHAPI([api.github.com])
-    W -->|subprocess HTTPS| ANTAPI([api.anthropic.com\nClaude CLI])
-    W -->|subprocess HTTPS| OAIAPI([api.openai.com\nCodex CLI])
-```
+<p align="center"><img src="../assets/diagrams/12-deployment.png" width="800" /></p>
 
 ### 7.1 Port Exposure
 
@@ -722,6 +597,7 @@ flowchart TB
 ### 7.2 External Connectivity
 
 - **Slack:** `slack-bolt` maintains a persistent outbound WebSocket connection to `api.slack.com` using Socket Mode — no inbound port required.
+- **Discord:** `slack-bolt` optionally connects to the Discord Gateway (`discord.com`) when `DISCORD_BOT_TOKEN` is set. The Discord adapter supports `mention_only` mode.
 - **GitHub:** Airflow DAGs communicate with `api.github.com` outbound; `omc_issue_analyzer` is triggered inbound via GitHub Actions → SSH → `airflow dags trigger`.
 - **Anthropic / OpenAI:** `worker` and Airflow DAGs call Claude CLI and Codex CLI as subprocesses; CLIs communicate with the respective APIs over HTTPS.
 - **Web UI:** Exposed publicly via Cloudflare Tunnel on port 3000 with TLS termination at Cloudflare.

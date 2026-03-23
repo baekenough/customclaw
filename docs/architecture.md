@@ -4,7 +4,7 @@
 
 ## 1. 시스템 개요
 
-CustomClaw는 Slack 기반 멀티봇 AI 플랫폼으로, 여러 Slack 봇을 하나의 인프라에서 운영하면서 각 봇이 독립적인 퍼소나·프로젝트 컨텍스트·도구 세트를 가질 수 있도록 설계되어 있습니다. 사용자 메시지는 Slack Socket Mode를 통해 수신되고, Redis Stream을 거쳐 Worker로 비동기 전달됩니다. Worker는 Claude CLI(Anthropic) 또는 Codex CLI(OpenAI)를 subprocess로 호출해 응답을 생성하며, 대화 이력은 PostgreSQL에, 장기 기억은 PostgreSQL(pgvector 임베딩) + OpenSearch(한국어 nori 키워드 검색)의 하이브리드 구조로 저장됩니다. Airflow는 GitHub 이슈 분석·릴리즈 모니터링 등 자동화 DAG를 담당하고, Next.js 기반 Web UI가 봇 관리와 모니터링 기능을 제공합니다.
+CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나의 인프라에서 운영하면서 각 봇이 독립적인 퍼소나·프로젝트 컨텍스트·도구 세트를 가질 수 있도록 설계되어 있습니다. Slack, Mattermost, Discord 플랫폼 어댑터를 지원합니다. 사용자 메시지는 Socket Mode(Slack) 또는 플랫폼별 어댑터를 통해 수신되고, Redis Stream을 거쳐 Worker로 비동기 전달됩니다. Worker는 Claude CLI(Anthropic) 또는 Codex CLI(OpenAI)를 subprocess로 호출해 응답을 생성하며, 대화 이력은 PostgreSQL에, 장기 기억은 PostgreSQL(pgvector 임베딩) + OpenSearch(한국어 nori 키워드 검색)의 하이브리드 구조로 저장됩니다. Airflow는 GitHub 이슈 분석·릴리즈 모니터링·공식 문서 변경 감지 등 자동화 DAG 9개를 담당하고, Next.js 기반 Web UI가 봇 관리와 모니터링 기능을 제공합니다.
 
 ---
 
@@ -22,15 +22,19 @@ CustomClaw는 Slack 기반 멀티봇 AI 플랫폼으로, 여러 Slack 봇을 하
 
 ## 3. 컴포넌트 상세
 
-### 3.1 slack-bolt (app.py / bot_runner.py)
+### 3.1 플랫폼 어댑터 (app.py / bot_runner.py)
 
-`BotManager`는 `/app/bots/*.yaml` 파일을 로드하고, 각 봇에 대해 `BotRunner` 인스턴스를 생성한 뒤 별도 스레드에서 Slack Socket Mode Handler를 시작합니다.
+`BotManager`는 `/app/bots/*.yaml` 파일을 로드하고, `platform` 필드에 따라 적절한 어댑터를 초기화합니다.
 
-`BotRunner`는 봇별 Socket Mode 연결을 관리합니다.
+**Slack 어댑터**: 각 봇에 대해 `BotRunner` 인스턴스를 생성한 뒤 별도 스레드에서 Slack Socket Mode Handler를 시작합니다.
 - `message` 이벤트를 수신하고 `subtype`이 있는 메시지(봇 메시지, 수정 이벤트 등)는 무시합니다.
 - `security.allowed_channels` / `security.allowed_users` 필터를 적용합니다.
 - 검증을 통과한 메시지를 `customclaw:slack-messages` Redis Stream에 `xadd`합니다.
 - 처리 중 ⏳ 리액션을 추가해 사용자에게 진행 상황을 알립니다.
+
+**Discord 어댑터** (`platforms/discord_adapter.py`): `discord.py` 라이브러리 기반. `DiscordConfig`의 `token`으로 연결하고, `guild_id`로 서버를 제한합니다. `security.mention_only: true` 설정 시 봇 멘션이 포함된 메시지만 처리합니다.
+
+**Mattermost 어댑터**: Mattermost WebSocket API 기반 어댑터.
 
 <p align="center"><img src="../assets/diagrams/03-worker-consumer.png" width="800" /></p>
 
@@ -70,44 +74,7 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 
 ### 3.5 도구 시스템 (tools/)
 
-```mermaid
-classDiagram
-    class BaseTool {
-        <<abstract>>
-        +definition() ToolDefinition
-        +execute(**kwargs) ToolResult
-    }
-    class ToolRegistry {
-        -_tools dict
-        +register(tool)
-        +get(name) BaseTool
-        +get_definitions(enabled) list
-    }
-    class CreateIssueTool
-    class QueryIssuesTool
-    class GetDagStatusTool
-    class ListDagRunsTool
-    class ListDagsTool
-    class TriggerDagTool
-    class SearchCodeTool
-    class CreateBotTool
-    class ListBotsTool
-    class UpdateBotTool
-    class DeleteBotTool
-
-    BaseTool <|-- CreateIssueTool
-    BaseTool <|-- QueryIssuesTool
-    BaseTool <|-- GetDagStatusTool
-    BaseTool <|-- ListDagRunsTool
-    BaseTool <|-- ListDagsTool
-    BaseTool <|-- TriggerDagTool
-    BaseTool <|-- SearchCodeTool
-    BaseTool <|-- CreateBotTool
-    BaseTool <|-- ListBotsTool
-    BaseTool <|-- UpdateBotTool
-    BaseTool <|-- DeleteBotTool
-    ToolRegistry "1" o-- "N" BaseTool
-```
+<p align="center"><img src="../assets/diagrams/05-tool-class.png" width="800" /></p>
 
 | 카테고리 | 도구 | 설명 |
 |----------|------|------|
@@ -115,79 +82,19 @@ classDiagram
 | Airflow | `get_dag_status`, `list_dag_runs`, `list_dags`, `trigger_dag` | DAG 상태 조회·트리거 |
 | 코드 검색 | `search_code` | 로컬 리포지토리 Claude CLI 검색 (`repo_path` 기반) |
 | 봇 관리 | `create_bot`, `list_bots`, `update_bot`, `delete_bot` | 런타임 봇 CRUD |
+| 런타임 제어 | `restart_runtime` | worker / app / all 안전 재시작 요청 (`target`: worker\|app\|all) |
 
-봇별 `tools.enabled` 설정으로 허용할 도구 집합을 제한할 수 있습니다.
+총 12개 도구. 봇별 `tools.enabled` 설정으로 허용할 도구 집합을 제한할 수 있습니다.
 
 ### 3.6 봇 설정 (config/loader.py)
 
-봇 설정은 YAML 파일(`/app/bots/*.yaml`) 또는 PostgreSQL `bots` 테이블에서 로드됩니다. 환경 변수 레퍼런스(`${ENV_VAR}` 형식)는 자동으로 확장됩니다.
+봇 설정은 YAML 파일(`/app/bots/*.yaml`) 또는 PostgreSQL `bots` 테이블에서 로드됩니다. 환경 변수 레퍼런스(`${ENV_VAR}` 형식)는 자동으로 확장됩니다. `platform` 필드로 `slack` / `mattermost` / `discord` 중 하나를 지정합니다.
 
-```mermaid
-classDiagram
-    class BotConfig {
-        +id: str
-        +name: str
-        +slack_app_token: str
-        +slack_bot_token: str
-        +channels: list[str]
-        +tools_enabled: list[str]
-    }
-    class PersonaConfig {
-        +display_name: str
-        +personality: str
-    }
-    class ProjectConfig {
-        +repo_path: str
-        +github_repo: str
-        +github_token_var: str
-    }
-    class ClaudeConfig {
-        +provider: str
-        +model: str
-        +max_turns: int
-        +full_agent: bool
-    }
-    class MemoryConfig {
-        +context_window: int
-        +auto_extract: bool
-    }
-    class SecurityConfig {
-        +allowed_channels: list[str]
-        +allowed_users: list[str]
-    }
-    BotConfig "1" *-- "1" PersonaConfig
-    BotConfig "1" *-- "1" ProjectConfig
-    BotConfig "1" *-- "1" ClaudeConfig
-    BotConfig "1" *-- "1" MemoryConfig
-    BotConfig "1" *-- "1" SecurityConfig
-```
+<p align="center"><img src="../assets/diagrams/06-bot-config.png" width="800" /></p>
 
 ### 3.7 Web UI (Next.js 16)
 
-```mermaid
-graph TB
-    Browser["브라우저"] -->|"HTTPS (Cloudflare)"| WebUI
-
-    subgraph WebUI["Next.js 16 App Router"]
-        Auth["NextAuth v5\n(GitHub OAuth)\nPrismaAdapter"]
-        API_Bots["/api/bots\n봇 CRUD"]
-        API_Airflow["/api/airflow/dags\nDAG 프록시"]
-        API_Health["/api/health\n서비스 헬스"]
-        API_Messages["/api/messages\n대화 이력"]
-        API_Usage["/api/usage\nAPI 사용량"]
-    end
-
-    Auth -->|"세션 검증"| API_Bots
-    Auth -->|"세션 검증"| API_Airflow
-    Auth -->|"세션 검증"| API_Health
-    API_Bots -->|"Prisma ORM"| PG
-    API_Messages -->|"Prisma ORM"| PG
-    API_Usage -->|"Prisma ORM"| PG
-    API_Airflow -->|"airflowFetch (Bearer JWT)"| Airflow[":8080/api/v2"]
-    API_Health -->|"TCP :6379"| Redis
-    API_Health -->|"HTTP :9200"| OpenSearch
-    API_Health -->|"HTTP /health"| Airflow
-```
+<p align="center"><img src="../assets/diagrams/07-web-ui.png" width="800" /></p>
 
 - **인증**: NextAuth v5 + GitHub OAuth Provider. `PrismaAdapter`로 세션을 PostgreSQL에 저장합니다.
 - **Airflow 프록시**: 매 요청마다 `/auth/token` 엔드포인트에서 JWT를 발급받아 `Authorization: Bearer` 헤더로 Airflow API를 호출합니다.
@@ -195,62 +102,7 @@ graph TB
 
 ### 3.8 Airflow DAGs
 
-```mermaid
-graph LR
-    subgraph omc_issue_analyzer["omc_issue_analyzer (4단계 파이프라인)"]
-        A1["fetch_issue_details"] --> A2["determine_analysis_depth"]
-        A3["sync_repo"] --> A2
-
-        %% Phase 1: 병렬 분석
-        A2 --> A4["analyze_architect\n(Claude opus)"]
-        A2 --> A5["analyze_colleague\n(Claude opus)"]
-
-        %% Phase 2: Professor 합성
-        A4 --> A6["professor_synthesize\n(architect + colleague → 종합)"]
-        A5 --> A6
-
-        %% Phase 3: Professor 판단
-        A6 --> A7["professor_decide\n(auto-dev or needs-input)"]
-
-        %% Phase 4: omcustom-driver 자동 개발
-        A7 -->|"auto-dev 승인 시"| A8["omcustom_driver\n(브랜치 생성 → 구현 → PR)"]
-        A7 -->|"needs-input 시"| A9["post_needs_input_comment\n(GitHub 코멘트 + 라벨)"]
-    end
-
-    subgraph claude_code_release_monitor
-        B1["fetch_releases\n(anthropics/claude-code)"] --> B2["filter_new_releases"]
-        B2 --> B3["create_issues\n(oh-my-customcode)"]
-        B3 --> B4["analyze_issues\n(Claude CLI)"]
-    end
-
-    subgraph gpt_codex_release_monitor
-        C1["fetch_releases\n(openai/codex)"] --> C2["filter_new_releases"]
-        C2 --> C3["create_issues\n(oh-my-customcode)"]
-        C3 --> C4["update_codex_cli\n(worker 컨테이너)"]
-    end
-
-    subgraph omc_codebase_indexer
-        D1["clone_or_pull\n(oh-my-customcode)"] --> D2["index_to_opensearch\n(RAG 검색용)"]
-    end
-
-    subgraph omc_feedback_collector
-        E1["receive_feedback"] --> E2["validate_feedback"]
-        E2 --> E3["create_github_issue\n(익명 제출 지원)"]
-    end
-
-    subgraph omc_pr_analyzer
-        F1["publish_to_redis_stream\n(customclaw:analysis-requests)"] --> F2["analysis_worker\n(Claude CLI)"]
-        F2 --> F3["notify_slack\n(thread_ts 기반)"]
-    end
-
-    GH["GitHub Actions\nWebhook → SSH"] -->|"airflow dags trigger"| omc_issue_analyzer
-    GH2["GitHub Actions\nissue-comment-reeval.yml"] -->|"needs-input 이슈에 답변 시\nre-trigger"| omc_issue_analyzer
-    GH3["GitHub Actions\npr-analysis.yml"] -->|"PR 이벤트 → SSH 트리거"| omc_pr_analyzer
-    GH4["GitHub Actions\nfeedback-submission.yml"] -->|"workflow_dispatch → SSH 트리거"| omc_feedback_collector
-    Scheduler["Airflow 스케줄러"] -->|"주기 실행"| claude_code_release_monitor
-    Scheduler -->|"주기 실행"| gpt_codex_release_monitor
-    Scheduler -->|"주기 실행"| omc_codebase_indexer
-```
+<p align="center"><img src="../assets/diagrams/08-dag-pipeline.png" width="800" /></p>
 
 | DAG | 트리거 | 역할 |
 |-----|--------|------|
@@ -260,6 +112,9 @@ graph LR
 | `omc_codebase_indexer` | 스케줄러 | oh-my-customcode 코드베이스를 OpenSearch에 인덱싱 (RAG 검색용) |
 | `omc_feedback_collector` | Airflow REST API / CLI | 사용자 피드백 수신, 검증 후 GitHub 이슈 생성 (익명 제출 지원) |
 | `omc_pr_analyzer` | GitHub Actions 웹훅 (SSH) | PR 분석 요청을 Redis Stream에 발행, 분석 워커가 Claude CLI로 분석 수행. Redis 분산 락으로 중복 분석 방지 |
+| `agentnav_issue_analyzer` | docs_drift_monitor 트리거 / GitHub Actions webhook | docs-drift 이슈에서 변경된 문서 소스를 식별하고 소스별 Redis Stream에 분석 요청 발행 → claude/codex/gemini analyzer 컨테이너가 소비 |
+| `docs_drift_monitor` | `0 */3 * * *` (3시간 주기) | Claude Code·Codex·Gemini CLI 공식 문서 변경 감지 → GitHub docs-drift 이슈 생성 → agentnav_issue_analyzer 트리거 |
+| `example_hello_world` | 수동 / 스케줄러 | Airflow 동작 확인용 예제 DAG |
 
 ### 3.9 omcustom-driver (자동 개발 에이전트)
 
@@ -355,66 +210,7 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 
 ## 5. 데이터베이스 스키마
 
-```mermaid
-erDiagram
-    messages {
-        UUID id PK
-        VARCHAR(64) bot_id
-        VARCHAR(64) channel_id
-        VARCHAR(64) thread_ts
-        VARCHAR(64) user_id
-        VARCHAR(16) role
-        TEXT content
-        TIMESTAMPTZ timestamp
-        vector_1024 embedding
-        JSONB metadata
-    }
-
-    memories {
-        UUID id PK
-        VARCHAR(64) bot_id
-        VARCHAR(64) user_id
-        VARCHAR(32) category
-        TEXT content
-        UUID source_message_id FK
-        vector_1024 embedding
-        TIMESTAMPTZ created_at
-        TIMESTAMPTZ expires_at
-        JSONB metadata
-    }
-
-    bots {
-        VARCHAR(64) id PK
-        VARCHAR(128) name
-        TEXT slack_app_token
-        TEXT slack_bot_token
-        JSONB channels
-        JSONB persona
-        JSONB project
-        JSONB airflow
-        JSONB tools
-        JSONB claude
-        JSONB memory
-        JSONB security
-        BOOLEAN is_active
-        TIMESTAMPTZ created_at
-        TIMESTAMPTZ updated_at
-    }
-
-    api_usage_logs {
-        UUID id PK
-        VARCHAR(64) bot_id
-        VARCHAR(64) user_id
-        VARCHAR(64) model
-        INTEGER input_tokens
-        INTEGER output_tokens
-        NUMERIC cost_usd
-        VARCHAR(64) tool_name
-        TIMESTAMPTZ created_at
-    }
-
-    messages ||--o{ memories : "source_message_id"
-```
+<p align="center"><img src="../assets/diagrams/09-er-diagram.png" width="800" /></p>
 
 ### 테이블별 설명
 
@@ -435,53 +231,11 @@ erDiagram
 
 ### Docker Compose 서비스 맵
 
-```mermaid
-graph TB
-    subgraph Volumes["Named Volumes"]
-        pgdata["pgdata\n(PostgreSQL 데이터)"]
-        osdata["osdata\n(OpenSearch 데이터)"]
-        redisdata["redisdata\n(Redis AOF)"]
-        repos["repos\n(shared workspace)"]
-    end
-
-    subgraph Services["Docker Compose 서비스"]
-        PG["postgres\n(pgvector/pgvector:pg16)\n:5432"]
-        OS["opensearch\n(custom Dockerfile\n+ nori 플러그인)\n:9200"]
-        Redis["redis\n(redis:7-alpine)\n:6379"]
-        AF["airflow\n(custom Dockerfile)\n:8080"]
-        SB["slack-bolt\n(custom Dockerfile)"]
-        WK["worker\n(same image as slack-bolt)"]
-        GW["git-worker\n(same image)"]
-        WU["web-ui\n(custom Dockerfile)\n:3000"]
-    end
-
-    PG --- pgdata
-    OS --- osdata
-    Redis --- redisdata
-    AF --- repos
-    SB --- repos
-    WK --- repos
-    GW --- repos
-```
+<p align="center"><img src="../assets/diagrams/10-docker-services.png" width="800" /></p>
 
 ### 서비스 의존 관계
 
-```mermaid
-graph LR
-    PG["postgres\n(healthy)"]
-    Redis["redis\n(healthy)"]
-    OS["opensearch\n(healthy)"]
-
-    AF["airflow"] -->|depends_on healthy| PG
-    SB["slack-bolt"] -->|depends_on healthy| PG
-    SB -->|depends_on healthy| Redis
-    WK["worker"] -->|depends_on healthy| PG
-    WK -->|depends_on healthy| Redis
-    WK -->|depends_on healthy| OS
-    GW["git-worker"] -->|depends_on healthy| Redis
-    WU["web-ui"] -->|depends_on healthy| PG
-    WU -->|depends_on healthy| Redis
-```
+<p align="center"><img src="../assets/diagrams/11-service-dependency.png" width="800" /></p>
 
 ### 주요 볼륨 마운트
 
@@ -500,25 +254,7 @@ graph LR
 
 ## 7. 배포 아키텍처
 
-```mermaid
-graph TB
-    Internet["인터넷"] -->|"HTTPS"| CF["Cloudflare Tunnel\n(cloudflared)"]
-    CF -->|"HTTP :3000"| WebUI["web-ui 컨테이너"]
-    Slack["Slack"] -->|"WSS Socket Mode"| SB["slack-bolt 컨테이너"]
-
-    subgraph Host["호스트 머신"]
-        WebUI
-        SB
-        PG["postgres :5432"]
-        OS["opensearch :9200"]
-        Redis["redis :6379"]
-        AF["airflow :8080"]
-        WK["worker"]
-        GW["git-worker"]
-    end
-
-    GH["GitHub Actions"] -->|"SSH + airflow CLI"| AF
-```
+<p align="center"><img src="../assets/diagrams/12-deployment.png" width="800" /></p>
 
 ### 포트 매핑
 
@@ -558,3 +294,5 @@ graph TB
 | pgvector + OpenSearch 하이브리드 | 시맨틱(벡터) + 키워드(nori) 검색 상호 보완 | OpenSearch 메모리 부담, 동기화 복잡도 |
 | YAML 봇 설정 (우선) + DB (보조) | 파일 기반 빠른 배포, DB로 Web UI 관리 지원 | 두 소스 간 동기화 일관성 주의 필요 |
 | Codex provider | Claude 대비 GPT-5.4 모델 옵션 추가 | 메타데이터 파싱 추가 구현 필요 |
+| 멀티플랫폼 어댑터 (Slack / Discord / Mattermost) | 단일 인프라에서 플랫폼별 봇 운영, Discord `mention_only` 등 플랫폼 특화 옵션 지원 | 플랫폼별 어댑터 유지보수 필요 |
+| 전용 analyzer 컨테이너 (claude/codex/gemini) | docs drift 분석을 CLI별 독립 컨테이너로 분리, Redis Stream 기반 비동기 처리 | 컨테이너 수 증가, CLI별 자격증명 볼륨 마운트 필요 |
