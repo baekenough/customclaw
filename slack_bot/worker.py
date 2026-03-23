@@ -428,7 +428,12 @@ def _run_codex_cli(
 
         output = result.stdout.strip()
         if not output:
-            log.warning("%s returned empty output", _provider_label("codex"))
+            log.warning(
+                "%s returned empty stdout (exit %d). stderr: %s",
+                _provider_label("codex"),
+                result.returncode,
+                result.stderr[-500:] if result.stderr else "(empty)",
+            )
             return None
 
         # Strip codex metadata header/footer lines, keep only content
