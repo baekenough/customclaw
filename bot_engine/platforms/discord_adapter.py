@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import threading
+import time
 from typing import Any
 
 import redis
@@ -35,6 +35,15 @@ _EMOJI_MAP: dict[str, str] = {
 
 _DISCORD_MSG_LIMIT = 2000
 
+# Discord embed field limits (from Discord API docs).
+_EMBED_TITLE_LIMIT = 256
+_EMBED_DESCRIPTION_LIMIT = 4096
+_EMBED_TOTAL_LIMIT = 6000
+
+# Rate-limit retry configuration.
+_MAX_RETRIES = 3
+_RETRY_BACKOFF_BASE = 1.0  # seconds
+
 
 def _resolve_emoji(name: str) -> str:
     """Resolve a named emoji to its Unicode character for the Discord API.
@@ -49,6 +58,59 @@ def _resolve_emoji(name: str) -> str:
         Unicode character string, or the original *name* if unmapped.
     """
     return _EMOJI_MAP.get(name, name)
+
+
+def _split_message(text: str, limit: int = _DISCORD_MSG_LIMIT) -> list[str]:
+    """Split *text* into chunks that each fit within *limit* characters.
+
+    Attempts to split at paragraph boundaries (double newline), then
+    single newlines, then spaces, and finally falls back to hard cuts at
+    the character boundary.  This approach preserves markdown structure
+    as much as possible across chunk boundaries.
+
+    Args:
+        text: The full message text to split.
+        limit: Maximum characters per chunk (default: Discord's 2000-char limit).
+
+    Returns:
+        List of non-empty string chunks, each at most *limit* characters.
+    """
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+
+    while len(remaining) > limit:
+        # Try paragraph boundary first (preserves structure best).
+        split_at = remaining.rfind("\n\n", 0, limit)
+        if split_at > 0:
+            chunks.append(remaining[: split_at + 2].rstrip())
+            remaining = remaining[split_at + 2 :]
+            continue
+
+        # Try single newline.
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at > 0:
+            chunks.append(remaining[:split_at])
+            remaining = remaining[split_at + 1 :]
+            continue
+
+        # Try word boundary (space).
+        split_at = remaining.rfind(" ", 0, limit)
+        if split_at > 0:
+            chunks.append(remaining[:split_at])
+            remaining = remaining[split_at + 1 :]
+            continue
+
+        # Hard cut — no suitable boundary found.
+        chunks.append(remaining[:limit])
+        remaining = remaining[limit:]
+
+    if remaining:
+        chunks.append(remaining)
+
+    return [c for c in chunks if c]
 
 
 class DiscordAdapter(PlatformAdapter):
@@ -366,8 +428,9 @@ class DiscordResponsePublisher(ResponsePublisher):
     use (mirrors the approach of other platform publishers).
 
     Discord messages are limited to 2 000 characters.  Long messages are
-    automatically split into sequential chunks; only the first chunk's ID
-    is returned.
+    automatically split into sequential chunks at logical boundaries
+    (paragraph breaks, then line breaks, then word boundaries); only the
+    first chunk's ID is returned.
 
     Args:
         bot_token: Discord bot token (without the ``Bot `` prefix — the
@@ -394,8 +457,9 @@ class DiscordResponsePublisher(ResponsePublisher):
     ) -> str:
         """Post a message to Discord and return the first chunk's message ID.
 
-        Long messages are split at the 2 000-character limit and sent as
-        consecutive messages in the same channel / thread.
+        Long messages are split at logical boundaries respecting the
+        2 000-character limit and sent as consecutive messages in the same
+        channel / thread.
 
         Args:
             channel_id: Discord channel snowflake ID.
@@ -405,10 +469,7 @@ class DiscordResponsePublisher(ResponsePublisher):
         Returns:
             The ``id`` of the first message chunk sent, or ``""`` on failure.
         """
-        chunks = [
-            text[i : i + _DISCORD_MSG_LIMIT]
-            for i in range(0, len(text), _DISCORD_MSG_LIMIT)
-        ]
+        chunks = _split_message(text)
         first_id: str | None = None
 
         for chunk in chunks:
@@ -416,18 +477,69 @@ class DiscordResponsePublisher(ResponsePublisher):
             if thread_id:
                 body["message_reference"] = {"message_id": thread_id}
 
-            resp = requests.post(
-                f"{self._base_url}/channels/{channel_id}/messages",
-                headers=self._headers,
-                json=body,
-                timeout=10,
-            )
-            resp.raise_for_status()
-            msg_id: str = resp.json()["id"]
-            if first_id is None:
+            msg_id = self._post_message(channel_id, body)
+            if msg_id and first_id is None:
                 first_id = msg_id
 
         return first_id or ""
+
+    def send_embed(
+        self,
+        channel_id: str,
+        title: str,
+        description: str,
+        *,
+        color: int = 0x5865F2,
+        thread_id: str | None = None,
+    ) -> str:
+        """Post a rich embed message to Discord.
+
+        If the embed payload is invalid or the API rejects it, falls back
+        to sending the description as plain text via :meth:`send_message`.
+
+        The embed title is clamped to 256 characters and the description to
+        4 096 characters per Discord API limits.  When the description
+        exceeds the limit, the overflow is sent as a follow-up plain-text
+        message.
+
+        Args:
+            channel_id: Discord channel snowflake ID.
+            title: Embed title (max 256 chars; truncated if longer).
+            description: Embed description text (max 4096 chars).
+            color: Embed sidebar colour as a decimal integer.
+                Defaults to Discord's blurple (``0x5865F2``).
+            thread_id: Message ID to reply to (creates an inline reply).
+
+        Returns:
+            The ``id`` of the embed message, or ``""`` on failure.
+        """
+        safe_title = title[:_EMBED_TITLE_LIMIT]
+        safe_description = description[:_EMBED_DESCRIPTION_LIMIT]
+        overflow = description[_EMBED_DESCRIPTION_LIMIT:]
+
+        embed: dict[str, Any] = {
+            "title": safe_title,
+            "description": safe_description,
+            "color": color,
+        }
+        body: dict[str, Any] = {"embeds": [embed]}
+        if thread_id:
+            body["message_reference"] = {"message_id": thread_id}
+
+        try:
+            msg_id = self._post_message(channel_id, body)
+        except Exception:
+            log.warning(
+                "Embed post failed for channel %s; falling back to plain text",
+                channel_id,
+            )
+            msg_id = self.send_message(channel_id, description, thread_id=thread_id)
+            return msg_id or ""
+
+        if overflow:
+            self.send_message(channel_id, overflow, thread_id=thread_id)
+
+        return msg_id or ""
 
     def add_reaction(
         self,
@@ -443,13 +555,19 @@ class DiscordResponsePublisher(ResponsePublisher):
             emoji: Emoji name without colons (e.g. ``"white_check_mark"``).
         """
         encoded = requests.utils.quote(_resolve_emoji(emoji))
-        resp = requests.put(
+        url = (
             f"{self._base_url}/channels/{channel_id}/messages"
-            f"/{message_id}/reactions/{encoded}/@me",
-            headers=self._headers,
-            timeout=10,
+            f"/{message_id}/reactions/{encoded}/@me"
         )
-        resp.raise_for_status()
+        try:
+            self._request("PUT", url)
+        except Exception:
+            log.warning(
+                "Failed to add reaction '%s' to message %s in channel %s",
+                emoji,
+                message_id,
+                channel_id,
+            )
 
     def remove_reaction(
         self,
@@ -465,13 +583,19 @@ class DiscordResponsePublisher(ResponsePublisher):
             emoji: Emoji name without colons.
         """
         encoded = requests.utils.quote(_resolve_emoji(emoji))
-        resp = requests.delete(
+        url = (
             f"{self._base_url}/channels/{channel_id}/messages"
-            f"/{message_id}/reactions/{encoded}/@me",
-            headers=self._headers,
-            timeout=10,
+            f"/{message_id}/reactions/{encoded}/@me"
         )
-        resp.raise_for_status()
+        try:
+            self._request("DELETE", url)
+        except Exception:
+            log.warning(
+                "Failed to remove reaction '%s' from message %s in channel %s",
+                emoji,
+                message_id,
+                channel_id,
+            )
 
     def get_thread_replies(
         self,
@@ -498,23 +622,19 @@ class DiscordResponsePublisher(ResponsePublisher):
         """
         # Attempt to read from the thread channel first.
         target_channel = thread_id or channel_id
-        resp = requests.get(
-            f"{self._base_url}/channels/{target_channel}/messages",
-            headers=self._headers,
-            params={"limit": min(limit, 100)},
-            timeout=10,
-        )
+        url = f"{self._base_url}/channels/{target_channel}/messages"
+        params = {"limit": min(limit, 100)}
 
-        if resp.status_code == 404:
-            # thread_id was a message ID, not a channel — fall back to parent
-            resp = requests.get(
-                f"{self._base_url}/channels/{channel_id}/messages",
-                headers=self._headers,
-                params={"limit": min(limit, 100)},
-                timeout=10,
-            )
+        try:
+            resp = self._request("GET", url, params=params)
+        except DiscordAPIError as exc:
+            if exc.status_code == 404:
+                # thread_id was a message ID, not a channel — fall back to parent
+                fallback_url = f"{self._base_url}/channels/{channel_id}/messages"
+                resp = self._request("GET", fallback_url, params=params)
+            else:
+                raise
 
-        resp.raise_for_status()
         messages: list[dict[str, Any]] = resp.json()
 
         return [
@@ -525,3 +645,149 @@ class DiscordResponsePublisher(ResponsePublisher):
             }
             for msg in reversed(messages)  # API returns newest-first; reverse to oldest-first
         ]
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _post_message(
+        self,
+        channel_id: str,
+        body: dict[str, Any],
+    ) -> str | None:
+        """POST *body* to the channel messages endpoint and return the message ID.
+
+        Args:
+            channel_id: Discord channel snowflake ID.
+            body: JSON-serialisable request body.
+
+        Returns:
+            The ``id`` field of the created message, or ``None`` on failure.
+
+        Raises:
+            DiscordAPIError: When the API returns a non-recoverable error.
+        """
+        url = f"{self._base_url}/channels/{channel_id}/messages"
+        resp = self._request("POST", url, json=body)
+        return str(resp.json()["id"])
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        json: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> requests.Response:
+        """Execute an HTTP request with rate-limit retry and error handling.
+
+        Retries up to :data:`_MAX_RETRIES` times on HTTP 429 responses,
+        honouring the ``Retry-After`` header.  Raises :exc:`DiscordAPIError`
+        for non-retryable 4xx/5xx responses.
+
+        Args:
+            method: HTTP method string (``"GET"``, ``"POST"``, etc.).
+            url: Full request URL.
+            json: Optional JSON body dict.
+            params: Optional query-string parameters.
+
+        Returns:
+            The successful :class:`requests.Response` object.
+
+        Raises:
+            DiscordAPIError: On unrecoverable API errors.
+            requests.RequestException: On network-level failures.
+        """
+        kwargs: dict[str, Any] = {"headers": self._headers, "timeout": 10}
+        if json is not None:
+            kwargs["json"] = json
+        if params is not None:
+            kwargs["params"] = params
+
+        for attempt in range(_MAX_RETRIES + 1):
+            resp = requests.request(method, url, **kwargs)
+
+            if resp.status_code == 429:
+                retry_after = _parse_retry_after(resp)
+                if attempt < _MAX_RETRIES:
+                    log.warning(
+                        "Discord rate limit hit; retrying in %.1fs (attempt %d/%d)",
+                        retry_after,
+                        attempt + 1,
+                        _MAX_RETRIES,
+                    )
+                    time.sleep(retry_after)
+                    continue
+                # Exhausted retries — raise as a non-recoverable error.
+                raise DiscordAPIError(429, resp.text)
+
+            if resp.status_code == 403:
+                log.error(
+                    "Discord API forbidden (%s %s): missing permissions",
+                    method,
+                    url,
+                )
+                raise DiscordAPIError(403, resp.text)
+
+            if resp.status_code == 404:
+                log.debug("Discord resource not found (%s %s)", method, url)
+                raise DiscordAPIError(404, resp.text)
+
+            if not resp.ok:
+                log.error(
+                    "Discord API error %d (%s %s): %s",
+                    resp.status_code,
+                    method,
+                    url,
+                    resp.text,
+                )
+                raise DiscordAPIError(resp.status_code, resp.text)
+
+            return resp
+
+        # Should never reach here, but satisfies the type checker.
+        raise DiscordAPIError(429, "Rate limit retries exhausted")
+
+
+class DiscordAPIError(Exception):
+    """Raised when the Discord REST API returns an error response.
+
+    Args:
+        status_code: HTTP status code from the response.
+        message: Response body text for debugging.
+    """
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(f"Discord API error {status_code}: {message}")
+        self.status_code = status_code
+
+
+def _parse_retry_after(resp: requests.Response) -> float:
+    """Extract the retry delay from a 429 response.
+
+    Reads the ``Retry-After`` header (which Discord may return as an integer
+    number of seconds or a float).  Falls back to a default backoff when the
+    header is absent or unparseable.
+
+    Args:
+        resp: The 429 :class:`requests.Response` object.
+
+    Returns:
+        Number of seconds to wait before retrying.
+    """
+    header = resp.headers.get("Retry-After")
+    if header is not None:
+        try:
+            return float(header)
+        except ValueError:
+            pass
+
+    # Discord's JSON body also carries ``retry_after`` (in seconds, as float).
+    try:
+        data = resp.json()
+        if "retry_after" in data:
+            return float(data["retry_after"])
+    except Exception:
+        pass
+
+    return _RETRY_BACKOFF_BASE
