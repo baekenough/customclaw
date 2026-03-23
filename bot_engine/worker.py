@@ -1306,6 +1306,24 @@ def main():
         merge_window=MERGE_WINDOW,
     )
 
+    # Hot-reload config on Pub/Sub event (no restart needed)
+    from bot_engine.config.hot_reload import start_config_subscriber
+
+    def _reload_config(bot_id: str) -> None:
+        nonlocal bots
+        log.info("Hot-reloading bot configs (triggered by: %s)...", bot_id)
+        new_configs = load_all_bots(bots_dir)
+        new_bots = {c.id: c for c in new_configs}
+        bots = new_bots
+        dispatcher._bots = new_bots
+        _publisher_cache.clear()
+        # Clear analysis_worker cached bot info
+        from bot_engine import analysis_worker
+        analysis_worker._cached_bot_info = None
+        log.info("Hot-reload complete: %d bot(s) loaded", len(new_bots))
+
+    start_config_subscriber(redis_url, _reload_config)
+
     # Start analysis request consumer in background
     start_analysis_consumer(redis_client)
 
