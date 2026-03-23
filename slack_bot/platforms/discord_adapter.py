@@ -289,6 +289,11 @@ class DiscordAdapter(PlatformAdapter):
         ):
             return
 
+        # mention_only: skip messages that don't @mention this bot
+        if matched_config.security.mention_only and self._client and self._client.user:
+            if self._client.user not in message.mentions:
+                return
+
         # Optimistic hourglass reaction while the worker processes
         try:
             await message.add_reaction(_resolve_emoji(_HOURGLASS))
@@ -302,12 +307,17 @@ class DiscordAdapter(PlatformAdapter):
             else str(message.id)
         )
 
+        # Strip bot mention tag from message text
+        text = message.content
+        if self._client and self._client.user:
+            text = text.replace(f"<@{self._client.user.id}>", "").strip()
+
         message_data: dict[str, str] = {
             "bot_id": matched_config.id,
             "channel_id": channel_id,
             "thread_ts": thread_ts,
             "user_id": user_id,
-            "text": message.content,
+            "text": text,
             "message_ts": str(message.id),
             "bot_token": matched_config.discord.token,
             "platform": "discord",

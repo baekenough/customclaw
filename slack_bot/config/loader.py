@@ -50,6 +50,7 @@ class SecurityConfig:
     allowed_channels: list[str] = field(default_factory=list)
     allowed_users: list[str] = field(default_factory=list)
     dangerous_tools: list[str] = field(default_factory=list)
+    mention_only: bool = False
 
 
 @dataclass
@@ -205,6 +206,7 @@ def load_bot_from_yaml(path: Path) -> BotConfig:
             allowed_channels=security_data.get("allowed_channels", []),
             allowed_users=security_data.get("allowed_users", []),
             dangerous_tools=security_data.get("dangerous_tools", []),
+            mention_only=security_data.get("mention_only", False),
         ),
     )
     _validate_bot_config(config)
