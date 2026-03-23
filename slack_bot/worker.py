@@ -416,7 +416,14 @@ def _run_codex_cli(
             return None
 
         output = result.stdout.strip()
+        log.info(
+            "Codex raw stdout (%d chars, prompt %d chars): %.300s",
+            len(output),
+            len(prompt),
+            output if output else "(empty)",
+        )
         if not output:
+            log.info("Codex prompt sent: %.500s", prompt)
             log.warning(
                 "%s returned empty stdout (exit %d). stderr: %s",
                 _provider_label("codex"),
