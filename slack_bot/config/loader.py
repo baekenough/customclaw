@@ -232,21 +232,27 @@ def _as_list(value) -> list:
 
 
 def load_bot_from_db_row(row) -> BotConfig:
-    """Load a single bot configuration from a database row."""
-    (
-        bot_id,
-        name,
-        slack_app_token,
-        slack_bot_token,
-        channels,
-        persona_data,
-        project_data,
-        airflow_data,
-        tools_data,
-        claude_data,
-        memory_data,
-        security_data,
-    ) = row
+    """Load a single bot configuration from a database row.
+
+    Supports both old 12-column schema and new 15-column schema that
+    adds platform, discord, and mattermost columns. Missing columns
+    fall back to safe defaults for backward compatibility.
+    """
+    bot_id = row[0]
+    name = row[1]
+    slack_app_token = row[2]
+    slack_bot_token = row[3]
+    channels = row[4]
+    persona_data = row[5]
+    project_data = row[6]
+    airflow_data = row[7]
+    tools_data = row[8]
+    claude_data = row[9]
+    memory_data = row[10]
+    security_data = row[11]
+    platform = row[12] if len(row) > 12 else "slack"
+    discord_data = row[13] if len(row) > 13 else {}
+    mattermost_data = row[14] if len(row) > 14 else {}
 
     persona_data = _as_dict(persona_data)
     project_data = _as_dict(project_data)
@@ -255,12 +261,24 @@ def load_bot_from_db_row(row) -> BotConfig:
     claude_data = _as_dict(claude_data)
     memory_data = _as_dict(memory_data)
     security_data = _as_dict(security_data)
+    discord_data = _as_dict(discord_data)
+    mattermost_data = _as_dict(mattermost_data)
 
     return BotConfig(
         id=bot_id,
         name=name,
         slack_app_token=_resolve_env(slack_app_token or ""),
         slack_bot_token=_resolve_env(slack_bot_token or ""),
+        platform=platform or "slack",
+        discord=DiscordConfig(
+            token=_resolve_env(discord_data.get("token", "")),
+            guild_id=discord_data.get("guild_id", ""),
+        ),
+        mattermost=MattermostConfig(
+            url=_resolve_env(mattermost_data.get("url", "")),
+            token=_resolve_env(mattermost_data.get("token", "")),
+            port=mattermost_data.get("port", 8065),
+        ),
         channels=_as_list(channels),
         persona=PersonaConfig(
             display_name=persona_data.get("display_name", name or bot_id or ""),
@@ -316,18 +334,23 @@ def load_all_bots_from_db() -> list[BotConfig]:
                     tools,
                     claude,
                     memory,
-                    security
+                    security,
+                    platform,
+                    discord,
+                    mattermost
                 FROM bots
                 WHERE is_active = true
                 ORDER BY created_at, id
                 """
             )
             rows = cur.fetchall()
-        return [
-            load_bot_from_db_row(row)
-            for row in rows
-            if row[2] and row[3]
-        ]
+        configs = []
+        for row in rows:
+            try:
+                configs.append(load_bot_from_db_row(row))
+            except (ValueError, Exception) as e:
+                print(f"[WARNING] Skipping bot {row[0]}: {e}")
+        return configs
     finally:
         conn.close()
 
