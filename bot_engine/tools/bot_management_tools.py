@@ -21,15 +21,10 @@ def _get_db_conn():
 
 
 def _notify_hot_reload(bot_id: str) -> None:
-    """Notify config change and request runtime restarts."""
+    """Notify config change via Pub/Sub. Worker hot-reloads; app restarts."""
     redis_url = os.environ.get("REDIS_URL", "redis://redis:6379")
     r = redis.from_url(redis_url)
     r.publish("customclaw:bot-config-changed", bot_id)
-    request_restart(
-        "worker",
-        requested_by="bot_config_changed",
-        reason=f"bot:{bot_id}",
-    )
     request_restart(
         "app",
         requested_by="bot_config_changed",
