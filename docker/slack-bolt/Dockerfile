@@ -27,8 +27,8 @@ RUN ln -sf /usr/lib/node_modules/@openai/codex/bin/codex.js /usr/local/bin/codex
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY slack_bot/ ./slack_bot/
+COPY bot_engine/ ./bot_engine/
 COPY bots/ ./bots/
 RUN chown -R appuser:appuser /app
 USER appuser
-CMD ["python", "-m", "slack_bot.app"]
+CMD ["python", "-m", "bot_engine.app"]

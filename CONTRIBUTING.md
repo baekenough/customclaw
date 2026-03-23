@@ -13,7 +13,7 @@ Thank you for your interest in contributing to customclaw!
 
 | Component | Tech | Location |
 |-----------|------|----------|
-| Slack Bot | Python (slack-bolt) | `slack_bot/` |
+| Bot Engine | Python (slack-bolt) | `bot_engine/` |
 | Web Dashboard | Next.js 16 / React 19 | `web-ui/` |
 | Database | PostgreSQL (pgvector) | `migrations/` |
 | Search | OpenSearch (nori) | — |
