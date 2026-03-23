@@ -401,7 +401,8 @@ def _run_codex_cli(
             prompt_file = f.name
 
         cmd = (
-            f"NO_COLOR=1 {CODEX_CLI_PATH} exec "
+            f"NO_COLOR=1 HOME={os.environ.get('CONTAINER_HOME', '/home/appuser')} "
+            f"{CODEX_CLI_PATH} exec "
             f"\"$(cat {prompt_file})\" "
             f"-m {model} "
             f"--dangerously-bypass-approvals-and-sandbox"
