@@ -18,28 +18,28 @@ import time
 import redis
 import requests
 
-from slack_bot.config.loader import load_all_bots, BotConfig
-from slack_bot.platforms.base import ResponsePublisher
-from slack_bot.platforms.slack_adapter import SlackResponsePublisher
-from slack_bot.memory.extractor import MemoryExtractor
-from slack_bot.memory.search import HybridSearch
-from slack_bot.memory.store import MessageStore
-from slack_bot.runtime_control import (
+from bot_engine.config.loader import load_all_bots, BotConfig
+from bot_engine.platforms.base import ResponsePublisher
+from bot_engine.platforms.slack_adapter import SlackResponsePublisher
+from bot_engine.memory.extractor import MemoryExtractor
+from bot_engine.memory.search import HybridSearch
+from bot_engine.memory.store import MessageStore
+from bot_engine.runtime_control import (
     consume_restart_request,
     is_supervised_runtime,
 )
-from slack_bot.tools.base import ToolRegistry
-from slack_bot.tools.github_tools import CreateIssueTool, QueryIssuesTool
-from slack_bot.tools.airflow_tools import GetDagStatusTool, ListDagRunsTool, ListDagsTool, TriggerDagTool
-from slack_bot.tools.code_tools import SearchCodeTool
-from slack_bot.tools.bot_management_tools import (
+from bot_engine.tools.base import ToolRegistry
+from bot_engine.tools.github_tools import CreateIssueTool, QueryIssuesTool
+from bot_engine.tools.airflow_tools import GetDagStatusTool, ListDagRunsTool, ListDagsTool, TriggerDagTool
+from bot_engine.tools.code_tools import SearchCodeTool
+from bot_engine.tools.bot_management_tools import (
     CreateBotTool,
     DeleteBotTool,
     ListBotsTool,
     RestartRuntimeTool,
     UpdateBotTool,
 )
-from slack_bot.analysis_worker import start_analysis_consumer
+from bot_engine.analysis_worker import start_analysis_consumer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,7 +78,7 @@ def _get_publisher(msg_data: dict, bots: dict) -> ResponsePublisher:
         return _publisher_cache[cache_key]
 
     if platform == "mattermost":
-        from slack_bot.platforms.mattermost_adapter import MattermostResponsePublisher  # noqa: PLC0415
+        from bot_engine.platforms.mattermost_adapter import MattermostResponsePublisher  # noqa: PLC0415
         config = bots.get(bot_id)
         if config and hasattr(config, "mattermost"):
             publisher: ResponsePublisher = MattermostResponsePublisher(
@@ -92,7 +92,7 @@ def _get_publisher(msg_data: dict, bots: dict) -> ResponsePublisher:
                 url=msg_data.get("platform_url", ""),
             )
     elif platform == "discord":
-        from slack_bot.platforms.discord_adapter import DiscordResponsePublisher  # noqa: PLC0415
+        from bot_engine.platforms.discord_adapter import DiscordResponsePublisher  # noqa: PLC0415
         publisher = DiscordResponsePublisher(bot_token=msg_data.get("bot_token", ""))
     else:
         publisher = SlackResponsePublisher(bot_token=msg_data.get("bot_token", ""))
@@ -250,7 +250,7 @@ def _restart_worker_if_requested() -> None:
         return
 
     log.warning("Restart requested for worker: %s", request)
-    os.execv(sys.executable, [sys.executable, "-m", "slack_bot.supervisor", "worker"])
+    os.execv(sys.executable, [sys.executable, "-m", "bot_engine.supervisor", "worker"])
 
 
 def _build_tool_descriptions(registry: ToolRegistry, enabled: list[str] | None = None) -> str:
@@ -1279,7 +1279,7 @@ def main():
     start_analysis_consumer(redis_client)
 
     # Start credential health probe in background
-    from slack_bot.credential_probe import start_credential_probe
+    from bot_engine.credential_probe import start_credential_probe
     probe_thread = start_credential_probe()
     log.info("Credential probe started (interval: 30m)")
 

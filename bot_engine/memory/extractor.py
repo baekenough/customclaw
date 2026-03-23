@@ -13,8 +13,8 @@ from datetime import datetime
 
 import psycopg2
 
-from slack_bot.memory.opensearch_client import OpenSearchClient
-from slack_bot.memory.store import MessageStore
+from bot_engine.memory.opensearch_client import OpenSearchClient
+from bot_engine.memory.store import MessageStore
 
 log = logging.getLogger(__name__)
 

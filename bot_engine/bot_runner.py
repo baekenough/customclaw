@@ -9,7 +9,7 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 
-from slack_bot.config.loader import BotConfig
+from bot_engine.config.loader import BotConfig
 
 log = logging.getLogger(__name__)
 

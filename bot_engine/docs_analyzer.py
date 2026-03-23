@@ -13,7 +13,7 @@ Configuration via environment variables:
     SLACK_CHANNEL:     Slack channel ID for #agentnav (optional)
 
 Usage:
-    python -m slack_bot.docs_analyzer
+    python -m bot_engine.docs_analyzer
 """
 
 from __future__ import annotations

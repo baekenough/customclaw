@@ -9,8 +9,8 @@ from __future__ import annotations
 import logging
 import re
 
-from slack_bot.memory.opensearch_client import OpenSearchClient
-from slack_bot.memory.store import MessageStore
+from bot_engine.memory.opensearch_client import OpenSearchClient
+from bot_engine.memory.store import MessageStore
 
 log = logging.getLogger(__name__)
 _SPACE_RE = re.compile(r"\s+")
