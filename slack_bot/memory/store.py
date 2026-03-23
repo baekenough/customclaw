@@ -256,6 +256,54 @@ class MessageStore:
                 return rows
         return self.get_channel_messages(bot_id, channel_id, limit)
 
+    # ------------------------------------------------------------------
+    # Preference cache: always-inject user preferences regardless of query
+    # ------------------------------------------------------------------
+
+    _preference_cache: dict[str, tuple[float, list[str]]] = {}
+    _PREFERENCE_TTL = 300  # 5 minutes
+
+    def get_preferences(self, bot_id: str) -> list[str]:
+        """Return all preference memories for a bot, with in-memory caching.
+
+        Preferences are user directives (e.g. "use polite speech") that must
+        be injected into every prompt regardless of query relevance.
+
+        Cache is invalidated after 5 minutes or when ``invalidate_preference_cache``
+        is called (e.g. after memory extraction).
+        """
+        import time as _time
+
+        cached = self._preference_cache.get(bot_id)
+        if cached:
+            ts, prefs = cached
+            if _time.time() - ts < self._PREFERENCE_TTL:
+                return prefs
+
+        if not self._pool:
+            return []
+        conn = self._pool.getconn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT content FROM memories
+                    WHERE bot_id = %s AND category = 'preference'
+                    ORDER BY created_at DESC LIMIT 20""",
+                    (bot_id,),
+                )
+                prefs = [row[0] for row in cur.fetchall()]
+            self._preference_cache[bot_id] = (_time.time(), prefs)
+            return prefs
+        except Exception as e:
+            log.warning("Failed to load preferences for %s: %s", bot_id, e)
+            return []
+        finally:
+            self._pool.putconn(conn)
+
+    def invalidate_preference_cache(self, bot_id: str) -> None:
+        """Clear cached preferences for a bot after new memories are extracted."""
+        self._preference_cache.pop(bot_id, None)
+
     def search_memories(self, bot_id: str, query_text: str, limit: int = 5) -> list[dict]:
         """Fallback keyword search against PostgreSQL memories."""
         if not self._pool or not query_text.strip():

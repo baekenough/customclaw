@@ -759,21 +759,37 @@ def process_message(
         max_turns = config.claude.max_turns
         is_full_agent = config.claude.full_agent
 
+        # Always-inject user preferences (cached, non-blocking)
+        preference_context = ""
+        try:
+            prefs = store.get_preferences(bot_id)
+            if prefs:
+                pref_lines = ["## 사용자 지침 (항상 준수):"]
+                for p in prefs:
+                    pref_lines.append(f"- {p}")
+                preference_context = "\n".join(pref_lines)
+        except Exception as e:
+            log.warning("Preference load failed (non-blocking): %s", e)
+
         # Search relevant memories (best-effort, non-blocking)
         memory_context = ""
         try:
             memories = memory_search.search(bot_id, text, top_k=5)
             if memories:
-                memory_lines = ["## 기억하고 있는 관련 정보:"]
-                for mem in memories:
-                    memory_lines.append(f"- [{mem['category']}] {mem['content']}")
-                memory_context = "\n".join(memory_lines)
+                # Exclude preferences already injected above
+                filtered = [m for m in memories if m.get("category") != "preference"]
+                if filtered:
+                    memory_lines = ["## 기억하고 있는 관련 정보:"]
+                    for mem in filtered:
+                        memory_lines.append(f"- [{mem['category']}] {mem['content']}")
+                    memory_context = "\n".join(memory_lines)
         except Exception as e:
             log.warning("Memory search failed (non-blocking): %s", e)
 
         if is_full_agent:
             # Full agent mode: just pass the message with system context.
             # Claude CLI handles everything (file ops, bash, etc.) natively.
+            preference_section = f"\n\n{preference_context}" if preference_context else ""
             memory_section = f"\n\n{memory_context}" if memory_context else ""
             history_section = f"\n\n{history_text}" if history_text else ""
             issue_section = ""
@@ -786,6 +802,7 @@ def process_message(
                 )
             full_prompt = (
                 f"{system_prompt}"
+                f"{preference_section}"
                 f"{memory_section}"
                 f"{issue_section}"
                 f"{history_section}"
@@ -824,8 +841,10 @@ def process_message(
                     f"이 스레드는 GitHub 이슈 #{msg_data['_analysis_issue']} 분석과 관련됩니다.\n\n"
                     f"{msg_data['_issue_context']}\n\n"
                 )
+            pref_section = f"{preference_context}\n\n" if preference_context else ""
             phase1_prompt = (
                 f"## System\n{system_prompt}\n\n"
+                f"{pref_section}"
                 f"{memory_context}"
                 f"{issue_section}\n\n"
                 f"{tool_descriptions}"
@@ -904,6 +923,7 @@ def process_message(
                 )
                 if len(recent) >= 4:
                     extractor.extract_and_store(bot_id, user_id, recent)
+                    store.invalidate_preference_cache(bot_id)
             except Exception as e:
                 log.warning("Memory extraction failed (non-blocking): %s", e)
 
