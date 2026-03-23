@@ -5,7 +5,7 @@ Install the optional dependency with::
     pip install mattermostdriver
 
 The adapter publishes messages to the same Redis Stream as
-:class:`~slack_bot.platforms.slack_adapter.SlackAdapter` so that the
+:class:`~bot_engine.platforms.slack_adapter.SlackAdapter` so that the
 worker layer processes Slack and Mattermost messages identically.
 """
 
@@ -18,7 +18,7 @@ from typing import Any
 
 import redis
 
-from slack_bot.platforms.base import PlatformAdapter, ResponsePublisher
+from bot_engine.platforms.base import PlatformAdapter, ResponsePublisher
 
 log = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ def _build_driver_options(config: Any) -> dict[str, Any]:
     """Construct the ``mattermostdriver.Driver`` options dict from a BotConfig.
 
     Args:
-        config: A :class:`~slack_bot.config.loader.BotConfig` instance.
+        config: A :class:`~bot_engine.config.loader.BotConfig` instance.
 
     Returns:
         Options dictionary accepted by ``mattermostdriver.Driver``.
@@ -82,7 +82,7 @@ class MattermostAdapter(PlatformAdapter):
     servers can coexist.
 
     Args:
-        configs: List of :class:`~slack_bot.config.loader.BotConfig`
+        configs: List of :class:`~bot_engine.config.loader.BotConfig`
             instances for Mattermost bots.
         redis_client: Connected Redis client used to publish messages.
     """
@@ -227,7 +227,7 @@ class MattermostAdapter(PlatformAdapter):
 
         Args:
             driver: Logged-in ``mattermostdriver.Driver`` instance.
-            config: Corresponding :class:`~slack_bot.config.loader.BotConfig`.
+            config: Corresponding :class:`~bot_engine.config.loader.BotConfig`.
         """
         import asyncio
 

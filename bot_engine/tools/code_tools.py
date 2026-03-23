@@ -7,7 +7,7 @@ import os
 import subprocess
 import tempfile
 
-from slack_bot.tools.base import BaseTool, ToolDefinition, ToolResult
+from bot_engine.tools.base import BaseTool, ToolDefinition, ToolResult
 
 log = logging.getLogger(__name__)
 

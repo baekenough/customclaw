@@ -18,28 +18,28 @@ import time
 import redis
 import requests
 
-from slack_bot.config.loader import load_all_bots, BotConfig
-from slack_bot.platforms.base import ResponsePublisher
-from slack_bot.platforms.slack_adapter import SlackResponsePublisher
-from slack_bot.memory.extractor import MemoryExtractor
-from slack_bot.memory.search import HybridSearch
-from slack_bot.memory.store import MessageStore
-from slack_bot.runtime_control import (
+from bot_engine.config.loader import load_all_bots, BotConfig
+from bot_engine.platforms.base import ResponsePublisher
+from bot_engine.platforms.slack_adapter import SlackResponsePublisher
+from bot_engine.memory.extractor import MemoryExtractor
+from bot_engine.memory.search import HybridSearch
+from bot_engine.memory.store import MessageStore
+from bot_engine.runtime_control import (
     consume_restart_request,
     is_supervised_runtime,
 )
-from slack_bot.tools.base import ToolRegistry
-from slack_bot.tools.github_tools import CreateIssueTool, QueryIssuesTool
-from slack_bot.tools.airflow_tools import GetDagStatusTool, ListDagRunsTool, ListDagsTool, TriggerDagTool
-from slack_bot.tools.code_tools import SearchCodeTool
-from slack_bot.tools.bot_management_tools import (
+from bot_engine.tools.base import ToolRegistry
+from bot_engine.tools.github_tools import CreateIssueTool, QueryIssuesTool
+from bot_engine.tools.airflow_tools import GetDagStatusTool, ListDagRunsTool, ListDagsTool, TriggerDagTool
+from bot_engine.tools.code_tools import SearchCodeTool
+from bot_engine.tools.bot_management_tools import (
     CreateBotTool,
     DeleteBotTool,
     ListBotsTool,
     RestartRuntimeTool,
     UpdateBotTool,
 )
-from slack_bot.analysis_worker import start_analysis_consumer
+from bot_engine.analysis_worker import start_analysis_consumer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -58,7 +58,7 @@ CONSUMER_NAME = os.environ.get(
 )
 CLAUDE_CLI_PATH = os.environ.get("CLAUDE_CLI_PATH", "claude")
 CODEX_CLI_PATH = os.environ.get("CODEX_CLI_PATH", "codex")
-PENDING_IDLE_MS = int(os.environ.get("REDIS_PENDING_IDLE_MS", "30000"))
+PENDING_IDLE_MS = int(os.environ.get("REDIS_PENDING_IDLE_MS", "300000"))
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_WORKERS", "10"))
 MERGE_WINDOW = int(os.environ.get("MERGE_WINDOW_SECONDS", "30"))
 
@@ -78,7 +78,7 @@ def _get_publisher(msg_data: dict, bots: dict) -> ResponsePublisher:
         return _publisher_cache[cache_key]
 
     if platform == "mattermost":
-        from slack_bot.platforms.mattermost_adapter import MattermostResponsePublisher  # noqa: PLC0415
+        from bot_engine.platforms.mattermost_adapter import MattermostResponsePublisher  # noqa: PLC0415
         config = bots.get(bot_id)
         if config and hasattr(config, "mattermost"):
             publisher: ResponsePublisher = MattermostResponsePublisher(
@@ -92,7 +92,7 @@ def _get_publisher(msg_data: dict, bots: dict) -> ResponsePublisher:
                 url=msg_data.get("platform_url", ""),
             )
     elif platform == "discord":
-        from slack_bot.platforms.discord_adapter import DiscordResponsePublisher  # noqa: PLC0415
+        from bot_engine.platforms.discord_adapter import DiscordResponsePublisher  # noqa: PLC0415
         publisher = DiscordResponsePublisher(bot_token=msg_data.get("bot_token", ""))
     else:
         publisher = SlackResponsePublisher(bot_token=msg_data.get("bot_token", ""))
@@ -129,7 +129,22 @@ def _require_response(output: str | None, provider: str) -> str:
     raise AgentExecutionError(provider, "no_output")
 
 
-def _parse_claude_json_output(raw: str) -> tuple[str, dict | None]:
+def _extract_usage_from_cli_json(data: dict) -> dict | None:
+    """Extract usage data from a Claude CLI status/error JSON response."""
+    usage_info: dict = {}
+    if data.get("usage"):
+        usage_info["input_tokens"] = data["usage"].get("input_tokens", 0)
+        usage_info["output_tokens"] = data["usage"].get("output_tokens", 0)
+        usage_info["cache_read_tokens"] = data["usage"].get("cache_read_input_tokens", 0)
+        usage_info["cache_creation_tokens"] = data["usage"].get("cache_creation_input_tokens", 0)
+    if data.get("total_cost_usd") is not None:
+        usage_info["cost_usd"] = data["total_cost_usd"]
+    if data.get("modelUsage"):
+        usage_info["model"] = next(iter(data["modelUsage"]), None)
+    return usage_info or None
+
+
+def _parse_claude_json_output(raw: str) -> tuple[str | None, dict | None]:
     """Parse Claude CLI ``--output-format json`` output.
 
     Returns ``(text, usage_dict)`` where *text* is the human-readable result
@@ -137,6 +152,10 @@ def _parse_claude_json_output(raw: str) -> tuple[str, dict | None]:
     failure).  If *raw* is not valid JSON the entire string is returned as
     plain text with ``None`` usage — this keeps backward compatibility when
     the CLI is invoked without ``--output-format json``.
+
+    Returns ``(None, usage_dict)`` for CLI status/error JSON (e.g. max_turns
+    reached) so the caller can raise a user-friendly error instead of
+    forwarding raw JSON to the user.
     """
     try:
         data = json.loads(raw)
@@ -144,6 +163,18 @@ def _parse_claude_json_output(raw: str) -> tuple[str, dict | None]:
         return raw, None
 
     if not isinstance(data, dict) or "result" not in data:
+        # Detect Claude CLI status/error JSON — these have a "type" key but
+        # no "result" text.  Return None so _require_response raises
+        # AgentExecutionError → user sees a friendly Korean error message.
+        if isinstance(data, dict) and data.get("type") == "result":
+            subtype = data.get("subtype", "")
+            if subtype == "error_max_turns":
+                log.warning("Claude CLI hit max_turns: %s", data)
+            elif data.get("is_error"):
+                log.warning("Claude CLI returned error response: %s", data)
+            else:
+                log.warning("Claude CLI returned status JSON without result text: %s", data)
+            return None, _extract_usage_from_cli_json(data)
         return raw, None
 
     text = data.get("result", "")
@@ -250,7 +281,7 @@ def _restart_worker_if_requested() -> None:
         return
 
     log.warning("Restart requested for worker: %s", request)
-    os.execv(sys.executable, [sys.executable, "-m", "slack_bot.supervisor", "worker"])
+    os.execv(sys.executable, [sys.executable, "-m", "bot_engine.supervisor", "worker"])
 
 
 def _build_tool_descriptions(registry: ToolRegistry, enabled: list[str] | None = None) -> str:
@@ -1279,7 +1310,7 @@ def main():
     start_analysis_consumer(redis_client)
 
     # Start credential health probe in background
-    from slack_bot.credential_probe import start_credential_probe
+    from bot_engine.credential_probe import start_credential_probe
     probe_thread = start_credential_probe()
     log.info("Credential probe started (interval: 30m)")
 

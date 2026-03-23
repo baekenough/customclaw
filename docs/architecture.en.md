@@ -531,7 +531,7 @@ Token usage tracking per bot invocation.
 
 Total: 12 services (11 always-on + 1 optional profile)
 
-The three analyzer services (`claude-analyzer`, `codex-analyzer`, `gemini-analyzer`) consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `agentnav_issue_analyzer` DAG. Each runs `slack_bot.docs_analyzer` with a different CLI backend.
+The three analyzer services (`claude-analyzer`, `codex-analyzer`, `gemini-analyzer`) consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `agentnav_issue_analyzer` DAG. Each runs `bot_engine.docs_analyzer` with a different CLI backend.
 
 ### 6.2 Named Volumes
 

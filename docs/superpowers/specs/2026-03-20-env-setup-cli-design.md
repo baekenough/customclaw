@@ -19,10 +19,10 @@ uv run setup.py
 
 | Included | Excluded (.gitignore) |
 |----------|----------------------|
-| Core platform code (`slack_bot/`) | `dags/*.py` (except example) |
+| Core platform code (`bot_engine/`) | `dags/*.py` (except example) |
 | Docker infrastructure (`docker/`, `docker-compose.yml`) | `bots/*.yaml` (except example) |
-| Memory system (`slack_bot/memory/`) | `workflows/` (all) |
-| Tool system (`slack_bot/tools/`) | `.env` |
+| Memory system (`bot_engine/memory/`) | `workflows/` (all) |
+| Tool system (`bot_engine/tools/`) | `.env` |
 | Web UI (`web-ui/`) | |
 | `setup.py`, `.env.example` | |
 | `dags/example_hello_world.py` | |

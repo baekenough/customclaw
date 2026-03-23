@@ -1,7 +1,7 @@
 """Multi-platform messaging adapters for customclaw."""
 
-from slack_bot.platforms.base import MessageEvent, PlatformAdapter, ResponsePublisher
-from slack_bot.platforms.slack_adapter import SlackAdapter, SlackResponsePublisher
+from bot_engine.platforms.base import MessageEvent, PlatformAdapter, ResponsePublisher
+from bot_engine.platforms.slack_adapter import SlackAdapter, SlackResponsePublisher
 
 __all__ = [
     "MessageEvent",
@@ -12,7 +12,7 @@ __all__ = [
 ]
 
 try:
-    from slack_bot.platforms.mattermost_adapter import (
+    from bot_engine.platforms.mattermost_adapter import (
         MattermostAdapter,
         MattermostResponsePublisher,
     )

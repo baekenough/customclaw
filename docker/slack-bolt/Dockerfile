@@ -28,8 +28,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install -r requirements.txt
-COPY slack_bot/ ./slack_bot/
+COPY bot_engine/ ./bot_engine/
 COPY bots/ ./bots/
 RUN chown -R appuser:appuser /app
 USER appuser
-CMD ["python", "-m", "slack_bot.app"]
+CMD ["python", "-m", "bot_engine.app"]

@@ -108,7 +108,7 @@ customclaw/
 │   └── web-ui/
 ├── migrations/                  # PostgreSQL schema migrations
 │   └── 001_initial.sql
-├── slack_bot/                   # Core Python package
+├── bot_engine/                  # Core Python package
 │   ├── app.py                   # BotManager — loads bots, manages Socket Mode threads
 │   ├── worker.py                # Redis Stream consumer — invokes Claude/Codex CLI
 │   ├── analysis_worker.py       # Dedicated analysis Redis Stream consumer
