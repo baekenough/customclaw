@@ -60,6 +60,12 @@ class MattermostConfig:
 
 
 @dataclass
+class DiscordConfig:
+    token: str = ""
+    guild_id: str = ""
+
+
+@dataclass
 class BotConfig:
     id: str
     name: str
@@ -67,6 +73,7 @@ class BotConfig:
     slack_bot_token: str
     platform: str = "slack"
     mattermost: MattermostConfig = field(default_factory=MattermostConfig)
+    discord: DiscordConfig = field(default_factory=DiscordConfig)
     channels: list[str] = field(default_factory=list)
     persona: PersonaConfig = field(default_factory=PersonaConfig)
     project: ProjectConfig = field(default_factory=ProjectConfig)
@@ -119,10 +126,23 @@ def _validate_bot_config(config: BotConfig) -> None:
                 f"Bot '{config.id}' (platform=mattermost) missing required fields: "
                 + ", ".join(missing)
             )
+    elif config.platform == "discord":
+        missing = [
+            field
+            for field, value in [
+                ("discord.token", config.discord.token),
+            ]
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Bot '{config.id}' (platform=discord) missing required fields: "
+                + ", ".join(missing)
+            )
     else:
         raise ValueError(
             f"Bot '{config.id}' has unsupported platform: '{config.platform}'. "
-            "Supported values: 'slack', 'mattermost'."
+            "Supported values: 'slack', 'mattermost', 'discord'."
         )
 
 
@@ -133,6 +153,7 @@ def load_bot_from_yaml(path: Path) -> BotConfig:
 
     slack = data.get("slack", {})
     mattermost_data = data.get("mattermost", {})
+    discord_data = data.get("discord", {})
     persona_data = data.get("persona", {})
     project_data = data.get("project", {})
     airflow_data = data.get("airflow", {})
@@ -151,6 +172,10 @@ def load_bot_from_yaml(path: Path) -> BotConfig:
             url=_resolve_env(mattermost_data.get("url", "")),
             token=_resolve_env(mattermost_data.get("token", "")),
             port=mattermost_data.get("port", 8065),
+        ),
+        discord=DiscordConfig(
+            token=_resolve_env(discord_data.get("token", "")),
+            guild_id=discord_data.get("guild_id", ""),
         ),
         channels=slack.get("channels", []),
         persona=PersonaConfig(

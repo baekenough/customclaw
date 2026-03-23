@@ -91,6 +91,9 @@ def _get_publisher(msg_data: dict, bots: dict) -> ResponsePublisher:
                 token=msg_data.get("bot_token", ""),
                 url=msg_data.get("platform_url", ""),
             )
+    elif platform == "discord":
+        from slack_bot.platforms.discord_adapter import DiscordResponsePublisher  # noqa: PLC0415
+        publisher = DiscordResponsePublisher(bot_token=msg_data.get("bot_token", ""))
     else:
         publisher = SlackResponsePublisher(bot_token=msg_data.get("bot_token", ""))
 

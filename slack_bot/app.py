@@ -25,6 +25,13 @@ try:
 except ImportError:
     _HAS_MATTERMOST = False
 
+try:
+    from slack_bot.platforms.discord_adapter import DiscordAdapter
+
+    _HAS_DISCORD = True
+except ImportError:
+    _HAS_DISCORD = False
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
@@ -55,8 +62,9 @@ class BotManager:
         # Split configs by platform
         slack_configs = [c for c in configs if c.platform == "slack"]
         mm_configs = [c for c in configs if c.platform == "mattermost"]
+        discord_configs = [c for c in configs if c.platform == "discord"]
         unknown = [
-            c for c in configs if c.platform not in {"slack", "mattermost"}
+            c for c in configs if c.platform not in {"slack", "mattermost", "discord"}
         ]
         if unknown:
             log.warning(
@@ -86,6 +94,23 @@ class BotManager:
                     "Initialised MattermostAdapter for %d bot(s): %s",
                     len(mm_configs),
                     [c.id for c in mm_configs],
+                )
+
+        # Build Discord adapters
+        if discord_configs:
+            if not _HAS_DISCORD:
+                log.error(
+                    "discord.py is not installed; skipping %d Discord "
+                    "bot(s).  Install it with: pip install discord.py",
+                    len(discord_configs),
+                )
+            else:
+                adapter = DiscordAdapter(discord_configs, self.redis_client)
+                self._adapters.append(adapter)
+                log.info(
+                    "Initialised DiscordAdapter for %d bot(s): %s",
+                    len(discord_configs),
+                    [c.id for c in discord_configs],
                 )
 
     def _build_slack_adapters(
