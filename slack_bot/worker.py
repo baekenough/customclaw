@@ -58,7 +58,7 @@ CONSUMER_NAME = os.environ.get(
 )
 CLAUDE_CLI_PATH = os.environ.get("CLAUDE_CLI_PATH", "claude")
 CODEX_CLI_PATH = os.environ.get("CODEX_CLI_PATH", "codex")
-PENDING_IDLE_MS = int(os.environ.get("REDIS_PENDING_IDLE_MS", "30000"))
+PENDING_IDLE_MS = int(os.environ.get("REDIS_PENDING_IDLE_MS", "300000"))
 MAX_CONCURRENT = int(os.environ.get("MAX_CONCURRENT_WORKERS", "10"))
 MERGE_WINDOW = int(os.environ.get("MERGE_WINDOW_SECONDS", "30"))
 
@@ -129,7 +129,22 @@ def _require_response(output: str | None, provider: str) -> str:
     raise AgentExecutionError(provider, "no_output")
 
 
-def _parse_claude_json_output(raw: str) -> tuple[str, dict | None]:
+def _extract_usage_from_cli_json(data: dict) -> dict | None:
+    """Extract usage data from a Claude CLI status/error JSON response."""
+    usage_info: dict = {}
+    if data.get("usage"):
+        usage_info["input_tokens"] = data["usage"].get("input_tokens", 0)
+        usage_info["output_tokens"] = data["usage"].get("output_tokens", 0)
+        usage_info["cache_read_tokens"] = data["usage"].get("cache_read_input_tokens", 0)
+        usage_info["cache_creation_tokens"] = data["usage"].get("cache_creation_input_tokens", 0)
+    if data.get("total_cost_usd") is not None:
+        usage_info["cost_usd"] = data["total_cost_usd"]
+    if data.get("modelUsage"):
+        usage_info["model"] = next(iter(data["modelUsage"]), None)
+    return usage_info or None
+
+
+def _parse_claude_json_output(raw: str) -> tuple[str | None, dict | None]:
     """Parse Claude CLI ``--output-format json`` output.
 
     Returns ``(text, usage_dict)`` where *text* is the human-readable result
@@ -137,6 +152,10 @@ def _parse_claude_json_output(raw: str) -> tuple[str, dict | None]:
     failure).  If *raw* is not valid JSON the entire string is returned as
     plain text with ``None`` usage — this keeps backward compatibility when
     the CLI is invoked without ``--output-format json``.
+
+    Returns ``(None, usage_dict)`` for CLI status/error JSON (e.g. max_turns
+    reached) so the caller can raise a user-friendly error instead of
+    forwarding raw JSON to the user.
     """
     try:
         data = json.loads(raw)
@@ -144,6 +163,18 @@ def _parse_claude_json_output(raw: str) -> tuple[str, dict | None]:
         return raw, None
 
     if not isinstance(data, dict) or "result" not in data:
+        # Detect Claude CLI status/error JSON — these have a "type" key but
+        # no "result" text.  Return None so _require_response raises
+        # AgentExecutionError → user sees a friendly Korean error message.
+        if isinstance(data, dict) and data.get("type") == "result":
+            subtype = data.get("subtype", "")
+            if subtype == "error_max_turns":
+                log.warning("Claude CLI hit max_turns: %s", data)
+            elif data.get("is_error"):
+                log.warning("Claude CLI returned error response: %s", data)
+            else:
+                log.warning("Claude CLI returned status JSON without result text: %s", data)
+            return None, _extract_usage_from_cli_json(data)
         return raw, None
 
     text = data.get("result", "")

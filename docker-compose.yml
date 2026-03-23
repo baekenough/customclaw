@@ -61,6 +61,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${CLAUDE_CLI_BINARY}:/home/airflow/.local/bin/claude:ro
       - ${CLAUDE_CONFIG_DIR}:/home/airflow/.claude
+      - ./docker/bot-claude-settings.json:/home/airflow/.claude/settings.json:ro
       - ${CLAUDE_CREDENTIALS_FILE}:/home/airflow/.claude.json
     ports:
       - "8080:8080"
@@ -117,6 +118,7 @@ services:
       - ./bots:/app/bots
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
       - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
+      - ./docker/bot-claude-settings.json:${CONTAINER_HOME}/.claude/settings.json:ro
       - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
       - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
       - ${CODEX_PKG_DIR}:/usr/lib/node_modules/@openai/codex:ro
@@ -190,6 +192,7 @@ services:
         condition: service_healthy
     volumes:
       - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
+      - ./docker/bot-claude-settings.json:${CONTAINER_HOME}/.claude/settings.json:ro
       - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
       - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
