@@ -105,7 +105,6 @@ customclaw/
 │   ├── analysis_worker.py   # 분석 전용 Redis Stream 컨슈머
 │   ├── supervisor.py        # 프로세스 슈퍼바이저
 │   ├── runtime_control.py   # 런타임 제어 헬퍼
-│   ├── git_worker.py        # Git 작업 전용 워커
 │   ├── bot_runner.py        # 개별 봇 실행 로직
 │   ├── config/
 │   │   └── loader.py        # YAML → BotConfig 로더

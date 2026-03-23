@@ -20,7 +20,6 @@ External → Reverse proxy / tunnel → http://<your-host>:3000
 | **Airflow** | apache/airflow:3.0.1 | Scheduled tasks (release monitoring, issue analysis) |
 | **slack-bolt** | Python (slack-bolt) | Slack event listener, message routing |
 | **worker** | Python + Claude/Codex CLI | LLM execution, conversation processing |
-| **git-worker** | Python | Repository sync operations via Redis queue |
 | **web-ui** | Next.js 16, shadcn/ui | Admin dashboard, bot management |
 
 ### Data Flow

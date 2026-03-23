@@ -58,11 +58,7 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 | `claude.full_agent` | full_agent 모드 활성화 |
 | `memory.context_window` | 대화 이력 불러올 메시지 수 (기본 20) |
 
-### 3.3 Git Worker (git_worker.py)
-
-현재 Phase 4 구현 대기 중인 스텁(stub) 상태입니다. 향후 Redis Stream에서 Git 작업 요청을 소비하고 `repos` 볼륨에 마운트된 워크스페이스에서 Git 명령을 실행할 예정입니다.
-
-### 3.4 메모리 시스템
+### 3.3 메모리 시스템
 
 <p align="center"><img src="../assets/diagrams/04-memory-extraction.png" width="800" /></p>
 
@@ -72,7 +68,7 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 - 추출은 대화 4개 메시지 이상 누적 시 Claude haiku(`--max-turns 1`)로 자동 실행됩니다.
 - RRF(Reciprocal Rank Fusion)로 두 검색 결과를 병합하는 코드는 TODO 상태입니다.
 
-### 3.5 도구 시스템 (tools/)
+### 3.4 도구 시스템 (tools/)
 
 <p align="center"><img src="../assets/diagrams/05-tool-class.png" width="800" /></p>
 
@@ -86,13 +82,13 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 
 총 12개 도구. 봇별 `tools.enabled` 설정으로 허용할 도구 집합을 제한할 수 있습니다.
 
-### 3.6 봇 설정 (config/loader.py)
+### 3.5 봇 설정 (config/loader.py)
 
 봇 설정은 YAML 파일(`/app/bots/*.yaml`) 또는 PostgreSQL `bots` 테이블에서 로드됩니다. 환경 변수 레퍼런스(`${ENV_VAR}` 형식)는 자동으로 확장됩니다. `platform` 필드로 `slack` / `mattermost` / `discord` 중 하나를 지정합니다.
 
 <p align="center"><img src="../assets/diagrams/06-bot-config.png" width="800" /></p>
 
-### 3.7 Web UI (Next.js 16)
+### 3.6 Web UI (Next.js 16)
 
 <p align="center"><img src="../assets/diagrams/07-web-ui.png" width="800" /></p>
 
@@ -100,7 +96,7 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 - **Airflow 프록시**: 매 요청마다 `/auth/token` 엔드포인트에서 JWT를 발급받아 `Authorization: Bearer` 헤더로 Airflow API를 호출합니다.
 - **헬스 체크**: PostgreSQL, Redis, OpenSearch, Airflow 4개 서비스를 병렬(`Promise.allSettled`)로 확인합니다. 하나라도 실패하면 HTTP 503을 반환합니다.
 
-### 3.8 Airflow DAGs
+### 3.7 Airflow DAGs
 
 <p align="center"><img src="../assets/diagrams/08-dag-pipeline.png" width="800" /></p>
 
@@ -116,7 +112,7 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 | `docs_drift_monitor` | `0 */3 * * *` (3시간 주기) | Claude Code·Codex·Gemini CLI 공식 문서 변경 감지 → GitHub docs-drift 이슈 생성 → agentnav_issue_analyzer 트리거 |
 | `example_hello_world` | 수동 / 스케줄러 | Airflow 동작 확인용 예제 DAG |
 
-### 3.9 omcustom-driver (자동 개발 에이전트)
+### 3.8 omcustom-driver (자동 개발 에이전트)
 
 Professor가 `auto-dev` 판단을 내린 이슈에 한해 활성화되는 자동 개발 파이프라인입니다.
 
@@ -142,7 +138,7 @@ omcustom-driver는 git 및 gh CLI가 필요합니다. worker 컨테이너 이미
 - `oh-my-customcode` 저장소의 `issue-comment-reeval.yml`이 `needs-input` 라벨이 붙은 이슈에 새 코멘트가 달리면 SSH를 통해 `omc_issue_analyzer` DAG를 재트리거합니다.
 - Analysis consumer는 xautoclaim 복구 기능을 갖추고 있어 재시작 시 메시지 유실을 방지합니다.
 
-### 3.10 Analysis Worker (analysis_worker.py)
+### 3.9 Analysis Worker (analysis_worker.py)
 
 PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈머입니다.
 
@@ -152,7 +148,7 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 - **중복 방지**: Redis `SET NX EX` 분산 락으로 동일 PR 15분 내 중복 분석 차단
 - **복구**: `xautoclaim`으로 미확인 메시지 자동 복구
 
-### 3.11 프로세스 관리 (supervisor.py / runtime_control.py)
+### 3.10 프로세스 관리 (supervisor.py / runtime_control.py)
 
 `supervisor.py`는 worker/app 프로세스의 관리형 재시작을 지원하는 프로세스 슈퍼바이저입니다. `runtime_control.py`는 Redis 기반 안전한 자체 재시작 요청 헬퍼를 제공합니다.
 
@@ -160,7 +156,7 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 - 종료 코드 75로 프로세스 종료 시 슈퍼바이저가 자동 재시작
 - `CUSTOMCLAW_SUPERVISED` 환경 변수로 슈퍼바이저 모드 감지
 
-### 3.12 GitHub Actions 워크플로우 (workflows/)
+### 3.11 GitHub Actions 워크플로우 (workflows/)
 
 | 워크플로우 | 파일 | 설명 |
 |-----------|------|------|
@@ -242,7 +238,7 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 | 볼륨/경로 | 서비스 | 목적 |
 |-----------|--------|------|
 | `./bots:/app/bots` | slack-bolt, worker | 봇 YAML 설정 파일 실시간 반영 |
-| `repos:${CONTAINER_HOME}/workspace` | slack-bolt, worker, git-worker, airflow | Git 리포지토리 공유 |
+| `repos:${CONTAINER_HOME}/workspace` | slack-bolt, worker, airflow | Git 리포지토리 공유 |
 | `${CLAUDE_CONFIG_DIR}:${CLAUDE_CONFIG_DIR}` | worker | Claude CLI 설정·인증 |
 | `${CLAUDE_CREDENTIALS_FILE}` | worker | Claude CLI 자격증명 |
 | `${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro` | worker | Claude CLI 바이너리 |
