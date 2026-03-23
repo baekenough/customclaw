@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-import tempfile
 
 from bot_engine.tools.base import BaseTool, ToolDefinition, ToolResult
 
@@ -39,20 +38,19 @@ class SearchCodeTool(BaseTool):
             return ToolResult(content=f"Repo path does not exist: {repo_path}", is_error=True)
 
         claude_cli = os.environ.get("CLAUDE_CLI_PATH", "claude")
-        prompt_file = None
         try:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-                f.write(query)
-                prompt_file = f.name
-
-            cmd = (
-                f'NO_COLOR=1 {claude_cli} -p "$(cat {prompt_file})" '
-                f'--model sonnet --max-turns {max_turns} '
-                f'--allowedTools Read,Glob,Grep'
-            )
+            env = {
+                **os.environ,
+                "NO_COLOR": "1",
+            }
             result = subprocess.run(
-                cmd,
-                shell=True,
+                [
+                    claude_cli, "-p", query,
+                    "--model", "sonnet",
+                    "--max-turns", str(max_turns),
+                    "--allowedTools", "Read,Glob,Grep",
+                ],
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=max_turns * 60,
@@ -81,6 +79,3 @@ class SearchCodeTool(BaseTool):
             )
         except Exception as e:
             return ToolResult(content=f"Code search failed: {e}", is_error=True)
-        finally:
-            if prompt_file and os.path.exists(prompt_file):
-                os.unlink(prompt_file)
