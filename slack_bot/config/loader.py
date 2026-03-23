@@ -309,6 +309,7 @@ def load_bot_from_db_row(row) -> BotConfig:
             allowed_channels=_as_list(security_data.get("allowed_channels", [])),
             allowed_users=_as_list(security_data.get("allowed_users", [])),
             dangerous_tools=_as_list(security_data.get("dangerous_tools", [])),
+            mention_only=security_data.get("mention_only", False),
         ),
     )
 
