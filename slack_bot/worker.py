@@ -835,7 +835,7 @@ def process_message(
         else:
             # Limited mode: use tool descriptions + JSON tool_call parsing
             tool_descriptions = _build_tool_descriptions(
-                registry, config.tools_enabled or None
+                registry, config.tools_enabled
             )
 
             # Phase 1 prompt: intent detection with optional tool use
