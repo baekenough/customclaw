@@ -41,12 +41,20 @@ interface AirflowHealthDetail {
   dagProcessor?: boolean;
 }
 
+interface LlmProviderStatus {
+  provider: string;
+  status: string;
+  error: string | null;
+  checkedAt: string;
+}
+
 interface HealthStatus {
   postgres: boolean;
   redis: boolean;
   opensearch: boolean;
   airflow: AirflowHealthDetail | boolean;
   healthy: boolean;
+  llmProviders?: LlmProviderStatus[];
 }
 
 interface DagSummary {
@@ -101,6 +109,12 @@ const SERVICE_ICONS = {
   redis: Layers,
   opensearch: Search,
 } as const;
+
+const PROVIDER_CONFIG: Record<string, { label: string; icon: typeof Bot }> = {
+  claude: { label: "Claude (Anthropic)", icon: Bot },
+  openai: { label: "OpenAI", icon: Bot },
+  gemini: { label: "Gemini (Google)", icon: Bot },
+};
 
 const SERVICE_LABELS = {
   postgres: "PostgreSQL",
@@ -529,6 +543,102 @@ export default function DashboardPage() {
           </Card>
         </div>
       </section>
+
+      {/* ================================================================= */}
+      {/* LLM Provider Status                                               */}
+      {/* ================================================================= */}
+      {health?.llmProviders && health.llmProviders.length > 0 && (
+        <section>
+          <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+            LLM 프로바이더
+          </h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+            {health.llmProviders.map((p) => {
+              const config = PROVIDER_CONFIG[p.provider] ?? {
+                label: p.provider,
+                icon: Bot,
+              };
+              const Icon = config.icon;
+              const isOk = p.status === "ok";
+              const isUnconfigured = p.status === "unconfigured";
+              return (
+                <Card key={p.provider} className="border-border/50">
+                  <CardContent className="flex items-center gap-3 p-4">
+                    <div
+                      className={`flex h-9 w-9 items-center justify-center rounded-lg ${
+                        isUnconfigured
+                          ? "bg-muted"
+                          : isOk
+                            ? "bg-emerald-500/15"
+                            : "bg-destructive/15"
+                      }`}
+                    >
+                      <Icon
+                        className={`h-4 w-4 ${
+                          isUnconfigured
+                            ? "text-muted-foreground"
+                            : isOk
+                              ? "text-emerald-500"
+                              : "text-destructive"
+                        }`}
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-xs text-muted-foreground">
+                        {config.label}
+                      </p>
+                      {loadingHealth ? (
+                        <div className="mt-1 h-4 w-12 animate-pulse rounded bg-muted" />
+                      ) : (
+                        <>
+                          <Badge
+                            variant={
+                              isOk
+                                ? "default"
+                                : isUnconfigured
+                                  ? "outline"
+                                  : "destructive"
+                            }
+                            className={`mt-0.5 text-xs ${
+                              isOk
+                                ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20 border-0"
+                                : isUnconfigured
+                                  ? "text-muted-foreground"
+                                  : ""
+                            }`}
+                          >
+                            {isOk ? "정상" : isUnconfigured ? "미설정" : "오류"}
+                          </Badge>
+                          {p.error && (
+                            <p
+                              className="mt-1 text-[10px] text-destructive truncate"
+                              title={p.error}
+                            >
+                              {p.error.length > 40
+                                ? p.error.slice(0, 40) + "…"
+                                : p.error}
+                            </p>
+                          )}
+                          {p.checkedAt && (
+                            <p className="mt-0.5 text-[10px] text-muted-foreground">
+                              {new Date(p.checkedAt).toLocaleString("ko-KR", {
+                                month: "2-digit",
+                                day: "2-digit",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </p>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {/* ================================================================= */}
       {/* Stats Section (period-aware)                                      */}

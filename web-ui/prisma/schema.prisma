@@ -113,3 +113,12 @@ model ApiUsageLog {
 
   @@map("api_usage_logs")
 }
+
+model CredentialStatus {
+  provider  String   @id @db.VarChar(32)
+  status    String   @default("unknown") @db.VarChar(16)
+  error     String?
+  checkedAt DateTime @default(now()) @map("checked_at") @db.Timestamptz()
+
+  @@map("credential_status")
+}

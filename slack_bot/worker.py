@@ -1256,6 +1256,11 @@ def main():
     # Start analysis request consumer in background
     start_analysis_consumer(redis_client)
 
+    # Start credential health probe in background
+    from slack_bot.credential_probe import start_credential_probe
+    probe_thread = start_credential_probe()
+    log.info("Credential probe started (interval: 30m)")
+
     log.info(
         "Worker %s started. Consuming from %s (max_workers=%d, merge_window=%ds)...",
         CONSUMER_NAME,

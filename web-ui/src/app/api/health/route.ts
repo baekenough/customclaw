@@ -57,6 +57,25 @@ export async function GET() {
     opensearch === true &&
     airflow.status === true;
 
+  // LLM 크레덴셜 상태 조회 (테이블 미존재 시 무시)
+  let llmProviders: Array<{
+    provider: string;
+    status: string;
+    error: string | null;
+    checkedAt: string;
+  }> = [];
+  try {
+    const rows = await prisma.credentialStatus.findMany();
+    llmProviders = rows.map((r) => ({
+      provider: r.provider,
+      status: r.status,
+      error: r.error,
+      checkedAt: r.checkedAt.toISOString(),
+    }));
+  } catch {
+    // Table may not exist yet — ignore
+  }
+
   return Response.json(
     {
       postgres,
@@ -64,6 +83,7 @@ export async function GET() {
       opensearch,
       airflow,
       healthy: allHealthy,
+      llmProviders,
     },
     { status: allHealthy ? 200 : 503 }
   );
