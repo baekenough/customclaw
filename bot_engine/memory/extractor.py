@@ -9,7 +9,6 @@ import re
 import subprocess
 import tempfile
 import uuid
-from datetime import datetime
 
 import psycopg2
 
