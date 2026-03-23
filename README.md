@@ -99,7 +99,7 @@ customclaw/
 │   ├── slack-bolt/          # Slack 봇 + Worker 이미지
 │   └── web-ui/              # Next.js 이미지
 ├── migrations/              # PostgreSQL 마이그레이션 SQL
-├── slack_bot/
+├── bot_engine/
 │   ├── app.py               # BotManager — Socket Mode 진입점
 │   ├── worker.py            # Redis Stream 컨슈머, CLI 실행
 │   ├── analysis_worker.py   # 분석 전용 Redis Stream 컨슈머

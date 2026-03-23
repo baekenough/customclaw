@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 
-from slack_bot.runtime_control import (
+from bot_engine.runtime_control import (
     RESTART_EXIT_CODE,
     RUNTIME_TARGET_ENV,
     SUPERVISED_ENV,
@@ -23,8 +23,8 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 MODULE_BY_TARGET = {
-    "worker": "slack_bot.worker",
-    "app": "slack_bot.app",
+    "worker": "bot_engine.worker",
+    "app": "bot_engine.app",
 }
 
 

@@ -10,8 +10,8 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk import WebClient
 
-from slack_bot.config.loader import BotConfig
-from slack_bot.platforms.base import PlatformAdapter, ResponsePublisher
+from bot_engine.config.loader import BotConfig
+from bot_engine.platforms.base import PlatformAdapter, ResponsePublisher
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ class SlackAdapter(PlatformAdapter):
     """Receives messages from Slack via Socket Mode and publishes to Redis Stream.
 
     A single :class:`SlackAdapter` instance can handle multiple
-    :class:`~slack_bot.config.loader.BotConfig` objects that share the
+    :class:`~bot_engine.config.loader.BotConfig` objects that share the
     same ``slack_app_token``.  The adapter routes each incoming message to
     the most specific config (channel-scoped first, then default) before
     publishing to the stream.

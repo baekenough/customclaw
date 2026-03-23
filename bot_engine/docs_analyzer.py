@@ -13,7 +13,7 @@ Configuration via environment variables:
     SLACK_CHANNEL:     Slack channel ID for #agentnav (optional)
 
 Usage:
-    python -m slack_bot.docs_analyzer
+    python -m bot_engine.docs_analyzer
 """
 
 from __future__ import annotations
@@ -45,27 +45,6 @@ _AGENTNAV_DOC_URLS: dict[str, str] = {
     "codex": "https://agentnav.baekenough.com/gpt-codex/agents.md",
     "gemini-cli": "https://agentnav.baekenough.com/gemini-cli/agents.md",
 }
-
-
-def _fetch_agentnav_doc(source_name: str) -> str:
-    """Fetch the AgentNav agents.md document for the given source.
-
-    Returns the document content, or an error message on failure.
-    """
-    url = _AGENTNAV_DOC_URLS.get(source_name, "")
-    if not url:
-        return f"(AgentNav document URL not configured for {source_name})"
-    try:
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        content = resp.text
-        # Truncate to avoid exceeding prompt limits
-        if len(content) > 15000:
-            content = content[:15000] + "\n\n... (truncated, full doc at " + url + ")"
-        return content
-    except Exception as exc:
-        log.warning("Failed to fetch AgentNav doc for %s: %s", source_name, exc)
-        return f"(Failed to fetch AgentNav document: {exc})"
 
 
 # ---------------------------------------------------------------------------

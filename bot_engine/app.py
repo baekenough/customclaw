@@ -10,23 +10,23 @@ import threading
 
 import redis
 
-from slack_bot.config.loader import BotConfig, load_all_bots
-from slack_bot.platforms.base import PlatformAdapter
-from slack_bot.platforms.slack_adapter import SlackAdapter
-from slack_bot.runtime_control import (
+from bot_engine.config.loader import BotConfig, load_all_bots
+from bot_engine.platforms.base import PlatformAdapter
+from bot_engine.platforms.slack_adapter import SlackAdapter
+from bot_engine.runtime_control import (
     consume_restart_request,
     is_supervised_runtime,
 )
 
 try:
-    from slack_bot.platforms.mattermost_adapter import MattermostAdapter
+    from bot_engine.platforms.mattermost_adapter import MattermostAdapter
 
     _HAS_MATTERMOST = True
 except ImportError:
     _HAS_MATTERMOST = False
 
 try:
-    from slack_bot.platforms.discord_adapter import DiscordAdapter
+    from bot_engine.platforms.discord_adapter import DiscordAdapter
 
     _HAS_DISCORD = True
 except ImportError:
@@ -43,7 +43,7 @@ class BotManager:
     """Loads bot configurations and manages per-platform adapter lifecycles.
 
     Each call to :meth:`load_bots` groups configs by platform and creates one
-    :class:`~slack_bot.platforms.base.PlatformAdapter` per platform group.
+    :class:`~bot_engine.platforms.base.PlatformAdapter` per platform group.
     :meth:`start` then runs every adapter in a daemon thread and blocks until
     a shutdown signal is received.
     """
@@ -183,7 +183,7 @@ class BotManager:
                 log.warning("Restart requested for app: %s", request)
                 os.execv(
                     sys.executable,
-                    [sys.executable, "-m", "slack_bot.supervisor", "app"],
+                    [sys.executable, "-m", "bot_engine.supervisor", "app"],
                 )
 
         # Graceful shutdown: stop all adapters, then wait for threads

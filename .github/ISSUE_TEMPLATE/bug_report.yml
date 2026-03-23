@@ -50,7 +50,7 @@ body:
     attributes:
       label: Affected Component
       options:
-        - Slack Bot (slack_bot)
+        - Bot Engine (bot_engine)
         - Web Dashboard (web-ui)
         - Worker (worker)
         - Airflow DAGs (dags)

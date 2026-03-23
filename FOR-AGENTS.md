@@ -112,6 +112,153 @@ Place `.py` DAG files in `dags/`. They are auto-loaded via volume mount.
 
 Example: `dags/example_hello_world.py` (included in repo)
 
+---
+
+## Architecture Overview
+
+> For the full architecture reference, see [docs/architecture.en.md](docs/architecture.en.md) (English) or [docs/architecture.md](docs/architecture.md) (Korean).
+
+CustomClaw is a multi-tenant AI bot platform. The core pipeline:
+
+```
+Platform (Slack/Discord/Mattermost)
+  → platform adapter (slack_bolt/discord/mattermost)
+  → Redis Stream (customclaw:slack-messages)
+  → worker.py (consumer group: customclaw-workers)
+  → Claude CLI / Codex CLI subprocess
+  → Platform response
+```
+
+Parallel pipeline for PR/issue analysis:
+
+```
+GitHub Actions webhook → SSH → Airflow DAG
+  → analysis request published to Redis Stream
+  → analysis_worker.py → Claude CLI analysis
+  → Slack thread notification
+```
+
+**Key architectural decisions:**
+- LLM invocation is via CLI subprocess (not direct API) — Claude CLI and Codex CLI run on the host and are bind-mounted into the worker container.
+- Platform adapters are thin: they validate messages, add reactions, and publish to Redis. All LLM logic lives in the worker.
+- Two execution modes per bot: `full_agent: true` (single CLI call with native file/shell tools) or `full_agent: false` (two-phase: detect tool intent, execute tool, synthesize response).
+
+---
+
+## Key Components
+
+| File | Role |
+|------|------|
+| `slack_bot/app.py` | `BotManager` — entry point; loads all bot YAMLs, starts one platform adapter thread per bot |
+| `slack_bot/bot_runner.py` | Slack `BotRunner` — registers message event handler, filters by channel/user, publishes to Redis |
+| `slack_bot/worker.py` | Core processing engine — Redis consumer, builds prompts, invokes CLI, posts responses, triggers memory extraction |
+| `slack_bot/analysis_worker.py` | Dedicated consumer for PR/issue analysis requests — parallel analyses via ThreadPoolExecutor |
+| `slack_bot/docs_analyzer.py` | Documentation drift analysis consumer — used by `claude-analyzer`, `codex-analyzer`, `gemini-analyzer` services |
+| `slack_bot/supervisor.py` | Process supervisor — monitors worker for exit code 75 (restart signal) and relaunches |
+| `slack_bot/config/loader.py` | Loads `bots/*.yaml` files into `BotConfig` dataclasses; resolves `${VAR_NAME}` references from environment |
+| `slack_bot/memory/extractor.py` | Extracts facts/decisions/preferences from conversations via Claude haiku |
+| `slack_bot/memory/search.py` | `HybridSearch` — queries OpenSearch (nori keyword) + pgvector (HNSW, future) and merges results |
+| `slack_bot/memory/store.py` | Persists messages and extracted memories to PostgreSQL and OpenSearch |
+| `slack_bot/platforms/` | Platform adapters: `slack_adapter.py`, `discord_adapter.py`, `mattermost_adapter.py` |
+| `slack_bot/tools/` | Tool implementations: `github_tools.py`, `airflow_tools.py`, `code_tools.py`, `bot_management_tools.py` |
+
+---
+
+## Message Flow
+
+End-to-end path for a user message (limited/tool-call mode):
+
+```
+1. User sends message in Slack channel
+       |
+2. BotRunner (slack_adapter.py)
+   - validates allowed_channels / allowed_users
+   - adds hourglass reaction to message
+   - xadd → Redis Stream "customclaw:slack-messages"
+       |
+3. worker.py picks up via xreadgroup (consumer group: customclaw-workers)
+   - save_message(role=user) → PostgreSQL
+   - get_recent_messages() → context window
+   - HybridSearch.search() → OpenSearch → top-5 relevant memories
+       |
+4. Prompt assembly:
+   - system: persona personality + GitHub repo ref + local repo path
+   - memory context: "## Related memories:" + search results
+   - conversation history (context_window messages)
+   - tool descriptions (if full_agent: false)
+   - user message
+       |
+5. Phase 1: Claude/Codex CLI invoked as subprocess
+   - if tool_call block detected in response:
+       → ToolRegistry.execute(tool_name, args)
+       → Phase 2: CLI invoked with original prompt + tool result
+   - if no tool_call:
+       → Phase 1 response used directly
+       |
+6. Response posted to Slack (chat_postMessage, in thread)
+   - save_message(role=assistant) → PostgreSQL
+   - xack (message acknowledged from Redis stream)
+       |
+7. Async (non-blocking):
+   - MemoryExtractor.extract_and_store() → mines facts/decisions/preferences
+   - stores in PostgreSQL memories table + OpenSearch index
+   - removes hourglass reaction, adds checkmark reaction
+```
+
+In `full_agent: true` mode, steps 4-5 collapse to a single CLI call with no tool-call detection phase.
+
+---
+
+## Common Tasks
+
+These are typical development tasks an AI agent would perform in this codebase.
+
+### Adding a new tool
+
+1. Create a new class in `slack_bot/tools/` inheriting from `BaseTool` (see `slack_bot/tools/base.py`).
+2. Implement `name`, `description`, and `execute(args)` properties/methods.
+3. Register the tool in `slack_bot/tools/__init__.py`.
+4. Document the tool name in `bots/example.yaml` under `tools.enabled`.
+
+### Adding a new platform adapter
+
+1. Create `slack_bot/platforms/<platform>_adapter.py` extending `BasePlatformAdapter` (`slack_bot/platforms/base.py`).
+2. Implement the message handler to publish to the Redis Stream with the same payload schema as the Slack adapter.
+3. Register the adapter in `slack_bot/app.py` `BotManager` startup logic.
+4. Add platform config section to `bots/example.yaml`.
+
+### Modifying the worker prompt
+
+The system prompt is assembled in `worker.py` → `_build_system_prompt()`. Memory context is prepended in the `_process_message()` method before the CLI call.
+
+### Adding a new Airflow DAG
+
+1. Create a `.py` file in `dags/` following Airflow 3.x DAG syntax.
+2. The DAG is auto-loaded via the `dags/` volume mount — no restart required.
+3. Trigger manually: `docker compose exec airflow airflow dags trigger <dag_id>`
+
+### Updating the database schema
+
+1. Add a new SQL migration file to `migrations/` (sequential naming convention).
+2. Apply it: `docker compose exec postgres psql -U customclaw -d customclaw -f /migrations/<file>.sql`
+
+### Local development workflow
+
+```bash
+# Build local images instead of pulling from GHCR
+cp docker-compose.override.yml.example docker-compose.override.yml
+docker compose up -d --build
+
+# After changing Python code in slack_bot/
+docker compose build worker
+docker compose up -d worker
+
+# Watch worker logs
+docker compose logs -f worker --since 2m
+```
+
+---
+
 ## Architecture Quick Reference
 
 ```
@@ -124,6 +271,8 @@ Redis: message queue + analysis request stream
 Airflow: scheduled DAGs (release monitoring, codebase indexing, etc.)
 Web UI (Next.js): http://localhost:3000 — dashboard, bot management, monitoring
 ```
+
+---
 
 ## Container Registry & Auto-update
 
