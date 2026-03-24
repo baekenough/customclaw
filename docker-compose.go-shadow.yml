@@ -29,9 +29,11 @@ services:
     volumes:
       - ./bots:/app/bots:ro
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
-      # Claude OAuth credentials (auto-refreshed by Go worker)
+      # Claude CLI binary + credentials
+      - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
       - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
       - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
+      - ./docker/bot-claude-settings.json:${CONTAINER_HOME}/.claude/settings.json:ro
       # Codex CLI — static Rust binary (no Node.js needed)
       - ${CODEX_PKG_DIR}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex:/usr/local/bin/codex:ro
       # Codex OAuth config
