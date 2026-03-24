@@ -22,7 +22,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ChevronLeft, X, Plus } from "lucide-react";
+import { ChevronLeft, X, Plus, HelpCircle } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { AVAILABLE_TOOLS, DANGEROUS_TOOLS } from "@/lib/bot-tools";
@@ -497,6 +497,9 @@ export default function NewBotPage() {
                   className="h-4 w-4 rounded border-border accent-primary"
                 />
                 <span className="text-sm">Full Agent 모드</span>
+                <span title="활성화 시 봇이 도구(tool)를 사용하여 코드 실행, 파일 검색 등 확장된 작업을 수행할 수 있습니다.">
+                  <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                </span>
               </label>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -506,6 +509,9 @@ export default function NewBotPage() {
                   className="h-4 w-4 rounded border-border accent-primary"
                 />
                 <span className="text-sm">메모리 자동 추출</span>
+                <span title="대화에서 중요한 정보를 자동으로 추출하여 장기 기억으로 저장합니다.">
+                  <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                </span>
               </label>
             </div>
           </CardContent>
