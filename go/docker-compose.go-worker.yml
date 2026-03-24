@@ -1,0 +1,38 @@
+services:
+  go-worker:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw"
+      BOTS_DIR: /app/bots
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      MAX_CONCURRENT_WORKERS: "10"
+      MERGE_WINDOW_SECONDS: "30"
+    volumes:
+      - ../bots:/app/bots:ro
+    entrypoint: ["worker"]
+
+  go-app:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw"
+      BOTS_DIR: /app/bots
+    volumes:
+      - ../bots:/app/bots:ro
+    entrypoint: ["app"]
