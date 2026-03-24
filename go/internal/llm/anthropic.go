@@ -76,7 +76,7 @@ func NewAnthropicProviderWithOAuth(tokenSource *OAuthTokenSource) *AnthropicProv
 		slog.Warn("oauth: could not obtain initial token", "error", err)
 	}
 	return &AnthropicProvider{
-		client:      anthropic.NewClient(option.WithAPIKey(token)),
+		client:      anthropic.NewClient(option.WithAuthToken(token)),
 		tokenSource: tokenSource,
 	}
 }
@@ -97,7 +97,7 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 			slog.Warn("oauth: token refresh failed, proceeding with current token", "error", err)
 		} else {
 			// Recreate the client with the fresh token for this call.
-			p.client = anthropic.NewClient(option.WithAPIKey(token))
+			p.client = anthropic.NewClient(option.WithAuthToken(token))
 		}
 	}
 
