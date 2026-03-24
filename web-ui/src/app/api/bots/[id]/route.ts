@@ -44,8 +44,11 @@ export async function PUT(
 
     const {
       name,
+      platform,
       slackAppToken,
       slackBotToken,
+      discord,
+      mattermost,
       channels,
       persona,
       project,
@@ -61,8 +64,11 @@ export async function PUT(
       where: { id },
       data: {
         ...(name !== undefined && { name }),
+        ...(platform !== undefined && { platform }),
         ...(slackAppToken !== undefined && { slackAppToken }),
         ...(slackBotToken !== undefined && { slackBotToken }),
+        ...(discord !== undefined && { discord }),
+        ...(mattermost !== undefined && { mattermost }),
         ...(channels !== undefined && { channels }),
         ...(persona !== undefined && { persona }),
         ...(project !== undefined && { project }),

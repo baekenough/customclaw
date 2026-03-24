@@ -33,25 +33,16 @@ import {
 import { ChevronLeft, Eye, EyeOff, X, Plus, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
-
-const AVAILABLE_TOOLS = [
-  "bash",
-  "read_file",
-  "write_file",
-  "search_code",
-  "git",
-  "github",
-  "web_search",
-  "jira",
-];
-
-const DANGEROUS_TOOLS = ["bash", "write_file", "git"];
+import { AVAILABLE_TOOLS, DANGEROUS_TOOLS } from "@/lib/bot-tools";
 
 interface BotRaw {
   id: string;
   name: string;
+  platform?: string;
   slackAppToken: string;
   slackBotToken: string;
+  discord?: { token?: string; guild_id?: string };
+  mattermost?: { url?: string; token?: string; port?: number };
   channels: string[];
   isActive: boolean;
   persona: { display_name?: string; description?: string; personality?: string };
@@ -85,8 +76,14 @@ export default function BotDetailPage({
 
   // Form state
   const [name, setName] = useState("");
+  const [platform, setPlatform] = useState<"slack" | "discord" | "mattermost">("slack");
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
+  const [discordToken, setDiscordToken] = useState("");
+  const [discordGuildId, setDiscordGuildId] = useState("");
+  const [mattermostUrl, setMattermostUrl] = useState("");
+  const [mattermostToken, setMattermostToken] = useState("");
+  const [mattermostPort, setMattermostPort] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
   const [personality, setPersonality] = useState("");
@@ -110,8 +107,14 @@ export default function BotDetailPage({
       .then((data: BotRaw) => {
         setBot(data);
         setName(data.name);
+        setPlatform((data.platform as "slack" | "discord" | "mattermost") ?? "slack");
         setSlackAppToken(data.slackAppToken);
         setSlackBotToken(data.slackBotToken);
+        setDiscordToken(data.discord?.token ?? "");
+        setDiscordGuildId(data.discord?.guild_id ?? "");
+        setMattermostUrl(data.mattermost?.url ?? "");
+        setMattermostToken(data.mattermost?.token ?? "");
+        setMattermostPort(data.mattermost?.port ? String(data.mattermost.port) : "");
         setDisplayName(data.persona?.display_name ?? "");
         setDescription(data.persona?.description ?? "");
         setPersonality(data.persona?.personality ?? "");
@@ -160,8 +163,12 @@ export default function BotDetailPage({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name,
-          slackAppToken,
-          slackBotToken,
+          platform,
+          ...(platform === "discord"
+            ? { discord: { token: discordToken, guild_id: discordGuildId }, slackAppToken: "", slackBotToken: "" }
+            : platform === "mattermost"
+            ? { mattermost: { url: mattermostUrl, token: mattermostToken, port: mattermostPort ? parseInt(mattermostPort) : 8065 }, slackAppToken: "", slackBotToken: "" }
+            : { slackAppToken, slackBotToken }),
           channels: allowedChannels,
           isActive,
           persona: { display_name: displayName, description, personality },
@@ -258,6 +265,22 @@ export default function BotDetailPage({
             <CardTitle className="text-sm">기본 정보</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label className="text-xs">플랫폼</Label>
+              <Select
+                value={platform}
+                onValueChange={(v) => setPlatform(v as "slack" | "discord" | "mattermost")}
+              >
+                <SelectTrigger className="h-9 text-sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="slack">Slack</SelectItem>
+                  <SelectItem value="discord">Discord</SelectItem>
+                  <SelectItem value="mattermost">Mattermost</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-xs">봇 ID</Label>
@@ -292,65 +315,156 @@ export default function BotDetailPage({
           </CardContent>
         </Card>
 
-        {/* Slack 토큰 */}
-        <Card className="border-border/50">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm">Slack 토큰</CardTitle>
-            <CardDescription className="text-xs">
-              수정하려면 새 값을 입력하세요
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label className="text-xs">App Token</Label>
-              <div className="relative">
-                <Input
-                  type={showAppToken ? "text" : "password"}
-                  value={slackAppToken}
-                  onChange={(e) => setSlackAppToken(e.target.value)}
-                  placeholder={maskToken(bot?.slackAppToken ?? "")}
-                  className="h-9 text-sm font-mono pr-10"
-                />
-                <button
-                  type="button"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  onClick={() => setShowAppToken(!showAppToken)}
-                  aria-label={showAppToken ? "토큰 숨기기" : "토큰 보기"}
-                >
-                  {showAppToken ? (
-                    <EyeOff className="h-3.5 w-3.5" />
-                  ) : (
-                    <Eye className="h-3.5 w-3.5" />
-                  )}
-                </button>
+        {/* 인증 */}
+        {platform === "slack" && (
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Slack 토큰</CardTitle>
+              <CardDescription className="text-xs">
+                수정하려면 새 값을 입력하세요
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label className="text-xs">App Token</Label>
+                <div className="relative">
+                  <Input
+                    type={showAppToken ? "text" : "password"}
+                    value={slackAppToken}
+                    onChange={(e) => setSlackAppToken(e.target.value)}
+                    placeholder={maskToken(bot?.slackAppToken ?? "")}
+                    className="h-9 text-sm font-mono pr-10"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowAppToken(!showAppToken)}
+                    aria-label={showAppToken ? "토큰 숨기기" : "토큰 보기"}
+                  >
+                    {showAppToken ? (
+                      <EyeOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Bot Token</Label>
-              <div className="relative">
-                <Input
-                  type={showBotToken ? "text" : "password"}
-                  value={slackBotToken}
-                  onChange={(e) => setSlackBotToken(e.target.value)}
-                  placeholder={maskToken(bot?.slackBotToken ?? "")}
-                  className="h-9 text-sm font-mono pr-10"
-                />
-                <button
-                  type="button"
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  onClick={() => setShowBotToken(!showBotToken)}
-                  aria-label={showBotToken ? "토큰 숨기기" : "토큰 보기"}
-                >
-                  {showBotToken ? (
-                    <EyeOff className="h-3.5 w-3.5" />
-                  ) : (
-                    <Eye className="h-3.5 w-3.5" />
-                  )}
-                </button>
+              <div className="space-y-2">
+                <Label className="text-xs">Bot Token</Label>
+                <div className="relative">
+                  <Input
+                    type={showBotToken ? "text" : "password"}
+                    value={slackBotToken}
+                    onChange={(e) => setSlackBotToken(e.target.value)}
+                    placeholder={maskToken(bot?.slackBotToken ?? "")}
+                    className="h-9 text-sm font-mono pr-10"
+                  />
+                  <button
+                    type="button"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowBotToken(!showBotToken)}
+                    aria-label={showBotToken ? "토큰 숨기기" : "토큰 보기"}
+                  >
+                    {showBotToken ? (
+                      <EyeOff className="h-3.5 w-3.5" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+        )}
+
+        {platform === "discord" && (
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Discord 인증</CardTitle>
+              <CardDescription className="text-xs">
+                수정하려면 새 값을 입력하세요
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-discord-token" className="text-xs">
+                  Bot Token <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="edit-discord-token"
+                  type="password"
+                  value={discordToken}
+                  onChange={(e) => setDiscordToken(e.target.value)}
+                  placeholder={bot?.discord?.token ? "••••••••" : "MTxxxxxxxxxxxxxxxxxxxxxxxx...."}
+                  className="h-9 text-sm font-mono"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-discord-guild-id" className="text-xs">
+                  Guild ID
+                </Label>
+                <Input
+                  id="edit-discord-guild-id"
+                  value={discordGuildId}
+                  onChange={(e) => setDiscordGuildId(e.target.value)}
+                  placeholder="123456789012345678"
+                  className="h-9 text-sm font-mono"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {platform === "mattermost" && (
+          <Card className="border-border/50">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm">Mattermost 인증</CardTitle>
+              <CardDescription className="text-xs">
+                수정하려면 새 값을 입력하세요
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="edit-mattermost-url" className="text-xs">
+                  서버 URL <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="edit-mattermost-url"
+                  value={mattermostUrl}
+                  onChange={(e) => setMattermostUrl(e.target.value)}
+                  placeholder="https://mattermost.example.com"
+                  className="h-9 text-sm font-mono"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-mattermost-token" className="text-xs">
+                  Bot Token <span className="text-destructive">*</span>
+                </Label>
+                <Input
+                  id="edit-mattermost-token"
+                  type="password"
+                  value={mattermostToken}
+                  onChange={(e) => setMattermostToken(e.target.value)}
+                  placeholder={bot?.mattermost?.token ? "••••••••" : "xxxxxxxxxxxxxxxxxxxxxxxxxx"}
+                  className="h-9 text-sm font-mono"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="edit-mattermost-port" className="text-xs">
+                  포트 (기본값: 8065)
+                </Label>
+                <Input
+                  id="edit-mattermost-port"
+                  type="number"
+                  value={mattermostPort}
+                  onChange={(e) => setMattermostPort(e.target.value)}
+                  placeholder="8065"
+                  className="h-9 text-sm"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* 페르소나 */}
         <Card className="border-border/50">

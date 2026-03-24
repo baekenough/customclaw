@@ -91,7 +91,7 @@ export default function BotsPage() {
         <div>
           <h1 className="text-2xl font-bold text-foreground">봇 관리</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            등록된 Slack 봇 목록
+            등록된 봇 목록
           </p>
         </div>
         <Link
@@ -134,6 +134,7 @@ export default function BotsPage() {
               <TableHeader>
                 <TableRow className="border-border/50 hover:bg-transparent">
                   <TableHead className="text-xs">이름</TableHead>
+                  <TableHead className="text-xs">플랫폼</TableHead>
                   <TableHead className="text-xs">Provider</TableHead>
                   <TableHead className="text-xs">모델</TableHead>
                   <TableHead className="text-xs">상태</TableHead>
@@ -154,6 +155,26 @@ export default function BotsPage() {
                           {bot.id}
                         </p>
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          bot.platform === "discord"
+                            ? "secondary"
+                            : bot.platform === "mattermost"
+                            ? "outline"
+                            : "default"
+                        }
+                        className={`text-xs capitalize ${
+                          bot.platform === "discord"
+                            ? "bg-violet-500/15 text-violet-400 border-0 hover:bg-violet-500/20"
+                            : bot.platform === "slack"
+                            ? "bg-emerald-500/15 text-emerald-400 border-0 hover:bg-emerald-500/20"
+                            : ""
+                        }`}
+                      >
+                        {bot.platform ?? "slack"}
+                      </Badge>
                     </TableCell>
                     <TableCell>
                       <Badge

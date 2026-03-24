@@ -105,6 +105,13 @@ func (s *MessageStore) Close() {
 	}
 }
 
+// Pool returns the underlying pgxpool.Pool so callers that need direct pool
+// access (e.g. credprobe) do not have to maintain a separate connection pool.
+// Returns nil when the store is running in no-op / in-memory mode.
+func (s *MessageStore) Pool() *pgxpool.Pool {
+	return s.pool
+}
+
 // ---------------------------------------------------------------------------
 // Core persistence
 // ---------------------------------------------------------------------------
