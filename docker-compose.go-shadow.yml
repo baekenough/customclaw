@@ -1,0 +1,87 @@
+# Go worker shadow mode — runs alongside Python worker on same consumer group.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml up -d go-worker
+#
+# Both Python and Go workers share the "customclaw-workers" consumer group,
+# so Redis automatically distributes messages between them.
+# Monitor logs to compare behavior before full cutover.
+#
+# Full cutover (replace Python worker):
+#   docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml up -d go-worker
+#   docker compose stop worker
+
+services:
+  go-worker:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./bots:/app/bots:ro
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace
+      # Claude CLI binary + credentials
+      - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
+      - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
+      - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
+      - ./docker/bot-claude-settings.json:${CONTAINER_HOME}/.claude/settings.json:ro
+      # Codex CLI — static Rust binary (no Node.js needed)
+      - ${CODEX_PKG_DIR}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex:/usr/local/bin/codex:ro
+      # Codex OAuth config
+      - ${CODEX_CONFIG_DIR}:${CONTAINER_HOME}/.codex
+      # Gemini config (for reference, SDK uses GEMINI_API_KEY)
+      - ${GEMINI_CONFIG_DIR}:${CONTAINER_HOME}/.gemini:ro
+    environment:
+      DATABASE_DSN: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw
+      REDIS_URL: redis://redis:6379
+      OPENSEARCH_URL: http://opensearch:9200
+      BOTS_DIR: /app/bots
+      HOME: ${CONTAINER_HOME}
+      CONTAINER_HOME: ${CONTAINER_HOME}
+      # Claude OAuth
+      CLAUDE_CREDENTIALS_PATH: ${CONTAINER_HOME}/.claude/.credentials.json
+      # Codex CLI
+      CODEX_CLI_PATH: /usr/local/bin/codex
+      # Gemini SDK
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      # Consumer group — same as Python worker for shadow mode
+      REDIS_CONSUMER_GROUP: customclaw-workers
+      REDIS_CONSUMER_NAME: go-worker-1
+      MAX_CONCURRENT_WORKERS: "5"
+      MERGE_WINDOW_SECONDS: "5"
+    entrypoint: ["worker"]
+
+  go-app:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 30s
+    profiles:
+      - go-full
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    volumes:
+      - ./bots:/app/bots:ro
+      - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
+      - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
+    environment:
+      DATABASE_DSN: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw
+      REDIS_URL: redis://redis:6379
+      BOTS_DIR: /app/bots
+      HOME: ${CONTAINER_HOME}
+      CLAUDE_CREDENTIALS_PATH: ${CONTAINER_HOME}/.claude/.credentials.json
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+    entrypoint: ["app"]

@@ -1,0 +1,54 @@
+services:
+  go-worker:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw"
+      BOTS_DIR: /app/bots
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      MAX_CONCURRENT_WORKERS: "10"
+      MERGE_WINDOW_SECONDS: "30"
+      # All LLM providers use CLI subprocess — set HOME for credential resolution
+      CONTAINER_HOME: /home/appuser
+      # Claude CLI
+      CLAUDE_CLI_PATH: /usr/local/bin/claude
+      # Codex CLI subprocess provider
+      CODEX_CLI_PATH: /usr/local/bin/codex
+      # Gemini CLI (optional)
+      GEMINI_CLI_PATH: ${GEMINI_CLI_PATH:-gemini}
+    volumes:
+      - ../bots:/app/bots:ro
+      # Claude CLI binary and credentials
+      - ${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro
+      - ${CLAUDE_CONFIG_DIR}:/home/appuser/.claude
+      - ${CLAUDE_CREDENTIALS_FILE}:/home/appuser/.claude.json
+      # Codex CLI: mount the static Rust binary directly.
+      # Set CODEX_PKG_DIR to the host path of the installed @openai/codex package, e.g.:
+      #   CODEX_PKG_DIR=$(npm root -g)/@openai/codex
+      - ${CODEX_PKG_DIR:-/usr/lib/node_modules/@openai/codex}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex:/usr/local/bin/codex:ro
+      - ${CODEX_CONFIG_DIR:-~/.codex}:/home/appuser/.codex
+    entrypoint: ["worker"]
+
+  go-app:
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      REDIS_URL: redis://redis:6379
+      DATABASE_DSN: "postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw"
+      BOTS_DIR: /app/bots
+    volumes:
+      - ../bots:/app/bots:ro
+    entrypoint: ["app"]
