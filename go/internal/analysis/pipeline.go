@@ -57,6 +57,9 @@ func processAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Prov
 		resp, err := provider.Complete(gctx, &llm.Request{
 			UserMessage: architectPromptText,
 			Model:       "opus",
+			MaxTurns:    10,
+			FullAgent:   true,
+			WorkDir:     req.RepoPath,
 		})
 		if err != nil {
 			slog.Warn("analysis: architect failed", "issue", issueNumber, "error", err)
@@ -70,6 +73,9 @@ func processAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Prov
 		resp, err := provider.Complete(gctx, &llm.Request{
 			UserMessage: colleaguePromptText,
 			Model:       "opus",
+			MaxTurns:    10,
+			FullAgent:   true,
+			WorkDir:     req.RepoPath,
 		})
 		if err != nil {
 			slog.Warn("analysis: colleague failed", "issue", issueNumber, "error", err)
@@ -131,6 +137,9 @@ func processAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Prov
 		profResp, err := provider.Complete(ctx, &llm.Request{
 			UserMessage: profPrompt,
 			Model:       "opus",
+			MaxTurns:    10,
+			FullAgent:   true,
+			WorkDir:     req.RepoPath,
 		})
 		if err != nil {
 			slog.Warn("analysis: professor failed", "issue", issueNumber, "error", err)
@@ -232,6 +241,9 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 		resp, err := provider.Complete(gctx, &llm.Request{
 			UserMessage: archPrompt,
 			Model:       "opus",
+			MaxTurns:    10,
+			FullAgent:   true,
+			WorkDir:     req.RepoPath,
 		})
 		if err != nil {
 			slog.Warn("analysis: PR architect failed", "pr", prNumber, "error", err)
@@ -245,6 +257,9 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 		resp, err := provider.Complete(gctx, &llm.Request{
 			UserMessage: collPrompt,
 			Model:       "opus",
+			MaxTurns:    10,
+			FullAgent:   true,
+			WorkDir:     req.RepoPath,
 		})
 		if err != nil {
 			slog.Warn("analysis: PR colleague failed", "pr", prNumber, "error", err)
@@ -312,6 +327,9 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 		profResp, err := provider.Complete(ctx, &llm.Request{
 			UserMessage: profPrompt,
 			Model:       "opus",
+			MaxTurns:    10,
+			FullAgent:   true,
+			WorkDir:     req.RepoPath,
 		})
 		if err != nil {
 			slog.Warn("analysis: PR professor failed", "pr", prNumber, "error", err)
