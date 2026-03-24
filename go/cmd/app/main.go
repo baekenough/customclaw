@@ -37,7 +37,7 @@ func run() error {
 		slog.Error("redis connect failed", "error", err)
 		return err
 	}
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 
 	configs, err := config.LoadAllBots(ctx, botsDir, databaseDSN)
 	if err != nil {

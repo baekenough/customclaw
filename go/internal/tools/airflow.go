@@ -53,7 +53,7 @@ func (c *airflowClient) ensureToken(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("auth request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
@@ -89,7 +89,7 @@ func (c *airflowClient) get(ctx context.Context, path string) (map[string]any, e
 	if err != nil {
 		return nil, fmt.Errorf("http get: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
@@ -122,7 +122,7 @@ func (c *airflowClient) post(ctx context.Context, path string, body map[string]a
 	if err != nil {
 		return nil, fmt.Errorf("http post: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {

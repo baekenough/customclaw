@@ -152,7 +152,7 @@ func (t *QueryIssuesTool) ExecuteWithContext(_ context.Context, args map[string]
 	if err != nil {
 		return ToolResult{IsError: true, Content: fmt.Sprintf("query issues: %v", err)}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {
@@ -215,7 +215,7 @@ func githubRequest(token, method, apiURL string, body map[string]any) (map[strin
 	if err != nil {
 		return nil, fmt.Errorf("http: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	data, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode >= 400 {

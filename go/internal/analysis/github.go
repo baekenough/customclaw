@@ -96,7 +96,7 @@ func postGithubComment(ctx context.Context, repo, issueNumber, body string) erro
 	if err != nil {
 		return fmt.Errorf("post comment: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("post comment status %d: %s", resp.StatusCode, b)
@@ -112,7 +112,7 @@ func deleteMatchingComments(ctx context.Context, c *ghClient, listURL, footer st
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var comments []struct {
 		ID   int64  `json:"id"`
@@ -140,7 +140,7 @@ func deleteMatchingComments(ctx context.Context, c *ghClient, listURL, footer st
 			slog.Warn("github: delete comment failed", "id", cm.ID, "error", err)
 			continue
 		}
-		r.Body.Close()
+		_ = r.Body.Close()
 		slog.Info("github: deleted old analysis comment", "id", cm.ID)
 	}
 	return nil
@@ -154,7 +154,7 @@ func addLabel(ctx context.Context, repo, issueNumber, label string) error {
 	if err != nil {
 		return fmt.Errorf("add label: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("add label status %d: %s", resp.StatusCode, b)
@@ -189,7 +189,7 @@ func fetchIssueAnalysisFromURL(ctx context.Context, url, token string) map[strin
 		slog.Warn("github: fetch issue analysis failed", "url", url, "error", err)
 		return result
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		slog.Warn("github: fetch comments non-200", "status", resp.StatusCode)

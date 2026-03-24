@@ -81,7 +81,7 @@ func (c *OpenSearchClient) ensureIndex(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode == http.StatusOK {
 		return nil // already exists
@@ -104,7 +104,7 @@ func (c *OpenSearchClient) ensureIndex(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("create index status %d: %s", resp.StatusCode, b)
@@ -138,7 +138,7 @@ func (c *OpenSearchClient) IndexMemory(ctx context.Context, memoryID, botID, con
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("index doc status %d: %s", resp.StatusCode, b)
@@ -231,7 +231,7 @@ func (c *OpenSearchClient) Search(ctx context.Context, botID, query string, topK
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
@@ -266,7 +266,7 @@ func (c *OpenSearchClient) Delete(ctx context.Context, memoryID string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("delete doc status %d: %s", resp.StatusCode, b)

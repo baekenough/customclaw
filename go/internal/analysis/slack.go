@@ -44,7 +44,7 @@ func loadBotInfo(ctx context.Context) botInfo {
 		slog.Warn("slack: db connect failed", "error", err)
 		return envBotInfo()
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	var token string
 	var channels []string

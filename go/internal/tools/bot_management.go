@@ -36,7 +36,7 @@ func redisPublish(ctx context.Context, botID string) error {
 		return fmt.Errorf("parse REDIS_URL: %w", err)
 	}
 	rdb := redis.NewClient(opt)
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 
 	return rdb.Publish(ctx, config.ConfigChannel, botID).Err()
 }
@@ -94,7 +94,7 @@ func (t *CreateBotTool) ExecuteWithContext(ctx context.Context, args map[string]
 	if err != nil {
 		return ToolResult{IsError: true, Content: fmt.Sprintf("db connect: %v", err)}
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	config := map[string]any{
 		"id":       id,
@@ -140,7 +140,7 @@ func (t *ListBotsTool) ExecuteWithContext(ctx context.Context, _ map[string]any)
 	if err != nil {
 		return ToolResult{IsError: true, Content: fmt.Sprintf("db connect: %v", err)}
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	rows, err := conn.Query(ctx,
 		`SELECT id, name, platform, is_active FROM bots ORDER BY name`)
@@ -217,7 +217,7 @@ func (t *UpdateBotTool) ExecuteWithContext(ctx context.Context, args map[string]
 	if err != nil {
 		return ToolResult{IsError: true, Content: fmt.Sprintf("db connect: %v", err)}
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	var setClauses []string
 	var params []any
@@ -304,7 +304,7 @@ func (t *DeleteBotTool) ExecuteWithContext(ctx context.Context, args map[string]
 	if err != nil {
 		return ToolResult{IsError: true, Content: fmt.Sprintf("db connect: %v", err)}
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	tag, err := conn.Exec(ctx,
 		"UPDATE bots SET is_active = false, updated_at = $1 WHERE id = $2",
@@ -360,7 +360,7 @@ func (t *RestartRuntimeTool) ExecuteWithContext(ctx context.Context, args map[st
 		return ToolResult{IsError: true, Content: fmt.Sprintf("parse REDIS_URL: %v", err)}
 	}
 	rdb := redis.NewClient(opt)
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 
 	payload, _ := json.Marshal(map[string]string{
 		"bot_id": botID,

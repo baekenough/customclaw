@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 	"time"
 )
@@ -87,8 +86,7 @@ func TestIsSupervisedRuntimeTrue(t *testing.T) {
 func TestIsSupervisedRuntimeOtherValue(t *testing.T) {
 	for _, v := range []string{"true", "yes", "0", "2"} {
 		t.Run(v, func(t *testing.T) {
-			os.Setenv(SupervisedEnv, v) //nolint:tenv // t.Setenv is preferred but we use Setenv + cleanup
-			t.Cleanup(func() { os.Unsetenv(SupervisedEnv) })
+			t.Setenv(SupervisedEnv, v)
 			if IsSupervisedRuntime() {
 				t.Errorf("IsSupervisedRuntime() = true for env value %q, want false", v)
 			}

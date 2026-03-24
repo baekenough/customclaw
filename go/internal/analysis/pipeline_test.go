@@ -122,7 +122,7 @@ func TestFetchIssueAnalysis(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(comments)
+		_ = json.NewEncoder(w).Encode(comments)
 	}))
 	defer ts.Close()
 
@@ -153,7 +153,7 @@ func TestFetchIssueAnalysis(t *testing.T) {
 func TestFetchIssueAnalysisEmpty(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]map[string]any{
+		_ = json.NewEncoder(w).Encode([]map[string]any{
 			{"id": 1, "body": "Just a regular comment."},
 		})
 	}))

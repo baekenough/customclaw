@@ -211,12 +211,12 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 		case r.Method == http.MethodPut:
 			w.WriteHeader(http.StatusOK)
-			io.WriteString(w, `{"acknowledged":true}`) //nolint:errcheck
+			_, _ = io.WriteString(w, `{"acknowledged":true}`)
 
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/_search"):
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			io.WriteString(w, `{
+			_, _ = io.WriteString(w, `{
 				"hits": {
 					"hits": [
 						{
@@ -230,15 +230,15 @@ func newTestServer(t *testing.T) *httptest.Server {
 						}
 					]
 				}
-			}`) //nolint:errcheck
+			}`)
 
 		case r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusOK)
-			io.WriteString(w, `{"result":"deleted"}`) //nolint:errcheck
+			_, _ = io.WriteString(w, `{"result":"deleted"}`)
 
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/_doc/"):
 			w.WriteHeader(http.StatusCreated)
-			io.WriteString(w, `{"result":"created"}`) //nolint:errcheck
+			_, _ = io.WriteString(w, `{"result":"created"}`)
 
 		default:
 			w.WriteHeader(http.StatusBadRequest)

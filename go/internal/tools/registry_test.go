@@ -228,7 +228,7 @@ func TestRegistry_BuildToolDescriptions_Deterministic(t *testing.T) {
 	posA := strings.Index(first, "a_tool")
 	posM := strings.Index(first, "m_tool")
 	posZ := strings.Index(first, "z_tool")
-	if !(posA < posM && posM < posZ) {
+	if posA >= posM || posM >= posZ {
 		t.Errorf("tools not in alphabetical order: a=%d m=%d z=%d", posA, posM, posZ)
 	}
 }

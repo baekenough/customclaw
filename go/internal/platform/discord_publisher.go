@@ -96,7 +96,7 @@ func (p *DiscordResponsePublisher) AddReaction(channelID, messageID, emoji strin
 		return fmt.Errorf("discord add reaction: %w", err)
 	}
 
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return nil
 }
 
@@ -111,7 +111,7 @@ func (p *DiscordResponsePublisher) RemoveReaction(channelID, messageID, emoji st
 	if err != nil {
 		return fmt.Errorf("discord remove reaction: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	return nil
 }
 
@@ -148,7 +148,7 @@ func (p *DiscordResponsePublisher) postMessage(channelID string, payload map[str
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result struct {
 		ID string `json:"id"`
@@ -166,7 +166,7 @@ func (p *DiscordResponsePublisher) fetchChannelMessages(channelID string, limit 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var raw []struct {
 		ID     string `json:"id"`
@@ -226,19 +226,19 @@ func (p *DiscordResponsePublisher) doWithRetry(method, url string, body []byte) 
 				"retry_after_sec", retryAfter,
 				"attempt", attempt+1,
 			)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			time.Sleep(time.Duration(retryAfter * float64(time.Second)))
 			continue
 		}
 
 		if resp.StatusCode == http.StatusNotFound {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("discord api 404: %s", url)
 		}
 
 		if resp.StatusCode >= 400 {
 			b, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return nil, fmt.Errorf("discord api error %d: %s", resp.StatusCode, string(b))
 		}
 

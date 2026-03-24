@@ -167,7 +167,7 @@ func LoadAllBotsFromDB(ctx context.Context, dsn string) ([]*BotConfig, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connect to database: %w", err)
 	}
-	defer conn.Close(ctx)
+	defer func() { _ = conn.Close(ctx) }()
 
 	rows, err := conn.Query(ctx, `
 		SELECT

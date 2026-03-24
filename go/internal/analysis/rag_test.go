@@ -39,7 +39,7 @@ func TestSearchRelevantCodeFormatting(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(buildOSResponse(hits))
+		_ = json.NewEncoder(w).Encode(buildOSResponse(hits))
 	}))
 	defer ts.Close()
 
@@ -94,7 +94,7 @@ func TestSearchRelevantCodeDeduplication(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(buildOSResponse(hits))
+		_ = json.NewEncoder(w).Encode(buildOSResponse(hits))
 	}))
 	defer ts.Close()
 
@@ -117,7 +117,7 @@ func TestSearchRelevantCodeDeduplication(t *testing.T) {
 func TestSearchRelevantCodeEmpty(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(buildOSResponse(nil))
+		_ = json.NewEncoder(w).Encode(buildOSResponse(nil))
 	}))
 	defer ts.Close()
 
@@ -159,7 +159,7 @@ func TestSearchRelevantCodeTruncation(t *testing.T) {
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(buildOSResponse(hits))
+		_ = json.NewEncoder(w).Encode(buildOSResponse(hits))
 	}))
 	defer ts.Close()
 

@@ -44,10 +44,10 @@ func runSubscribeLoop(ctx context.Context, redisURL string, onReload func(botID 
 		return err
 	}
 	rdb := redis.NewClient(opts)
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 
 	ps := rdb.Subscribe(ctx, ConfigChannel)
-	defer ps.Close()
+	defer func() { _ = ps.Close() }()
 
 	slog.Info("config hot-reload subscriber started", "channel", ConfigChannel)
 

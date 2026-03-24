@@ -40,7 +40,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 
 	return runtime.RunSupervisor(ctx, rdb, target)
 }

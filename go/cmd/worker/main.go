@@ -63,7 +63,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("redis connect: %w", err)
 	}
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 
 	// Create consumer group (idempotent)
 	if err := rediswrapper.EnsureStreamGroup(ctx, rdb, worker.StreamKey, consumerGroup); err != nil {

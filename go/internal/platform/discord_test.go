@@ -244,7 +244,7 @@ func TestDiscordPublisher_SendMessage_PostsCorrectURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		captured = r
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"id":"999"}`)
+		_, _ = fmt.Fprintf(w, `{"id":"999"}`)
 	}))
 	defer srv.Close()
 
@@ -270,7 +270,7 @@ func TestDiscordPublisher_SendMessage_SplitsLongMessage(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"id":"%d"}`, callCount)
+		_, _ = fmt.Fprintf(w, `{"id":"%d"}`, callCount)
 	}))
 	defer srv.Close()
 
@@ -362,12 +362,12 @@ func TestDiscordPublisher_RateLimit_Retry(t *testing.T) {
 				"message":     "You are being rate limited.",
 				"retry_after": 0.0,
 			})
-			w.Write(body)
+			_, _ = w.Write(body)
 			return
 		}
 		// Second call: success
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintf(w, `{"id":"789"}`)
+		_, _ = fmt.Fprintf(w, `{"id":"789"}`)
 	}))
 	defer srv.Close()
 
