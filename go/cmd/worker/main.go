@@ -82,13 +82,16 @@ func run() error {
 		botsMap[cfg.ID] = cfg
 	}
 
-	// LLM provider — auth priority:
+	// LLM providers — build all providers at startup and select per-message
+	// based on each bot's configured provider name.
+	//
+	// Anthropic auth priority:
 	//   1. ANTHROPIC_API_KEY env var  (direct API key, SDK reads it automatically)
 	//   2. CLAUDE_CREDENTIALS_PATH env var (OAuth credentials file path)
 	//   3. Default OAuth path: ~/.claude/.credentials.json
-	var provider llm.Provider
+	var anthropicProvider llm.Provider
 	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		provider = llm.NewAnthropicProvider() // SDK picks up ANTHROPIC_API_KEY
+		anthropicProvider = llm.NewAnthropicProvider() // SDK picks up ANTHROPIC_API_KEY
 	} else {
 		credPath := os.Getenv("CLAUDE_CREDENTIALS_PATH")
 		if credPath == "" {
@@ -104,8 +107,26 @@ func run() error {
 		}
 		tokenSource.StartPeriodicRefresh(ctx)
 		slog.Info("using OAuth token from credentials file", "path", credPath)
-		provider = llm.NewAnthropicProviderWithOAuth(tokenSource)
+		anthropicProvider = llm.NewAnthropicProviderWithOAuth(tokenSource)
 	}
+
+	// OpenAI provider (codex replacement). Reads OPENAI_API_KEY automatically.
+	openaiProvider := llm.NewOpenAIProvider()
+
+	// Gemini provider. Reads GEMINI_API_KEY automatically.
+	geminiProvider := llm.NewGeminiProvider("")
+
+	// Provider registry: keyed by canonical provider name.
+	// Aliases ("claude", "codex") are resolved in selectProvider.
+	providers := map[string]llm.Provider{
+		"anthropic": anthropicProvider,
+		"openai":    openaiProvider,
+		"gemini":    geminiProvider,
+	}
+
+	// Keep a reference to the default provider for backwards-compatible
+	// code paths that still hold a single llm.Provider reference.
+	provider := anthropicProvider
 
 	// Memory subsystem.
 	store, err := memory.NewMessageStore(ctx, databaseDSN)
@@ -139,10 +160,11 @@ func run() error {
 		return pubFactory.Get(plt, token)
 	}
 
-	// Processor.
-	proc := worker.NewProcessor(
+	// Processor — uses the provider registry to select the right LLM per bot.
+	proc := worker.NewProcessorWithProviders(
 		botsMap,
-		provider,
+		providers,
+		provider, // default: Anthropic
 		store,
 		search,
 		registry,

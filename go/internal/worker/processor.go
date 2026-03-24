@@ -38,6 +38,7 @@ type Processor struct {
 	mu               sync.RWMutex
 	bots             map[string]*config.BotConfig
 	provider         llm.Provider
+	providers        map[string]llm.Provider // keyed by provider name ("claude", "openai", "gemini")
 	store            *memory.MessageStore
 	search           *memory.HybridSearch
 	registry         *tools.Registry
@@ -46,7 +47,8 @@ type Processor struct {
 	publisherFactory PublisherFactory
 }
 
-// NewProcessor creates a Processor.
+// NewProcessor creates a Processor with a single default provider.
+// Use NewProcessorWithProviders to support multiple LLM backends per bot.
 func NewProcessor(
 	bots map[string]*config.BotConfig,
 	provider llm.Provider,
@@ -57,9 +59,44 @@ func NewProcessor(
 	usageLogger *usage.Logger,
 	publisherFactory PublisherFactory,
 ) *Processor {
+	providers := map[string]llm.Provider{}
+	if provider != nil {
+		providers[provider.Name()] = provider
+	}
 	return &Processor{
 		bots:             bots,
 		provider:         provider,
+		providers:        providers,
+		store:            store,
+		search:           search,
+		registry:         registry,
+		extractor:        extractor,
+		usageLogger:      usageLogger,
+		publisherFactory: publisherFactory,
+	}
+}
+
+// NewProcessorWithProviders creates a Processor with a named provider registry.
+// The defaultProvider is used when a bot's configured provider name is not
+// found in the providers map.
+func NewProcessorWithProviders(
+	bots map[string]*config.BotConfig,
+	providers map[string]llm.Provider,
+	defaultProvider llm.Provider,
+	store *memory.MessageStore,
+	search *memory.HybridSearch,
+	registry *tools.Registry,
+	extractor *memory.MemoryExtractor,
+	usageLogger *usage.Logger,
+	publisherFactory PublisherFactory,
+) *Processor {
+	if providers == nil {
+		providers = map[string]llm.Provider{}
+	}
+	return &Processor{
+		bots:             bots,
+		provider:         defaultProvider,
+		providers:        providers,
 		store:            store,
 		search:           search,
 		registry:         registry,
@@ -238,6 +275,33 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 	return responseText, nil
 }
 
+// selectProvider returns the Provider configured for the given bot. It falls
+// back to the default provider when the bot's preferred provider is not
+// registered in the map.
+func (p *Processor) selectProvider(cfg *config.BotConfig) llm.Provider {
+	if len(p.providers) > 0 {
+		name := cfg.Claude.Provider
+		if name == "" {
+			name = "anthropic"
+		}
+		if prov, ok := p.providers[name]; ok {
+			return prov
+		}
+		// Name not found — also try common aliases.
+		switch name {
+		case "claude":
+			if prov, ok := p.providers["anthropic"]; ok {
+				return prov
+			}
+		case "codex":
+			if prov, ok := p.providers["openai"]; ok {
+				return prov
+			}
+		}
+	}
+	return p.provider
+}
+
 // callLLM assembles an llm.Request and calls the provider.
 // toolDescs is appended to the system prompt when non-empty.
 func (p *Processor) callLLM(
@@ -260,7 +324,8 @@ func (p *Processor) callLLM(
 		WorkDir:      cfg.Project.RepoPath,
 	}
 
-	resp, err := p.provider.Complete(ctx, req)
+	provider := p.selectProvider(cfg)
+	resp, err := provider.Complete(ctx, req)
 	if err != nil {
 		return "", fmt.Errorf("llm complete: %w", err)
 	}
