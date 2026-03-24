@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,29 +21,27 @@ func main() {
 		UserMessage:  "Say hello in Korean.",
 	}
 
-	// 1. Anthropic (OAuth) — read from .claude/.credentials.json
-	fmt.Println("=== 1. Anthropic (Claude OAuth) ===")
-	credPath := filepath.Join(home, ".claude", ".credentials.json")
-	if _, err := os.Stat(credPath); err != nil {
-		// macOS desktop app might not have .credentials.json — skip
-		fmt.Println("  SKIP: .credentials.json not found (desktop app uses different auth)")
+	// 1. Claude CLI subprocess — reads OAuth credentials from ~/.claude/
+	fmt.Println("=== 1. Claude (CLI subprocess) ===")
+	claudeCliPath := filepath.Join(home, ".claude")
+	if _, err := os.Stat(claudeCliPath); err != nil {
+		fmt.Println("  SKIP: ~/.claude not found (Claude CLI not configured)")
 	} else {
-		ts, err := llm.NewOAuthTokenSource(credPath)
+		provider := llm.NewClaudeProvider()
+		req.Model = "haiku"
+		resp, err := provider.Complete(ctx, req)
 		if err != nil {
-			fmt.Printf("  ERROR loading OAuth: %v\n", err)
+			fmt.Printf("  ERROR: %v\n", err)
 		} else {
-			provider := llm.NewAnthropicProviderWithOAuth(ts)
-			req.Model = "haiku"
-			resp, err := provider.Complete(ctx, req)
-			if err != nil {
-				fmt.Printf("  ERROR: %v\n", err)
-			} else {
-				fmt.Printf("  OK: %s\n", resp.Text[:min(len(resp.Text), 80)])
+			text := resp.Text
+			if len(text) > 80 {
+				text = text[:80]
 			}
+			fmt.Printf("  OK: %s\n", text)
 		}
 	}
 
-	// 2. Codex (CLI subprocess — uses ChatGPT OAuth, incompatible with REST API SDK)
+	// 2. Codex CLI subprocess — uses ChatGPT OAuth, incompatible with REST API SDK
 	fmt.Println("\n=== 2. Codex (CLI subprocess) ===")
 	codexAuthPath := filepath.Join(home, ".codex", "auth.json")
 	if _, err := os.Stat(codexAuthPath); err != nil {
@@ -64,15 +61,13 @@ func main() {
 		}
 	}
 
-	// 3. Gemini (Google OAuth token)
-	fmt.Println("\n=== 3. Gemini (Google OAuth) ===")
-	geminiToken := readGeminiToken(filepath.Join(home, ".gemini", "oauth_creds.json"))
-	if geminiToken == "" {
-		fmt.Println("  SKIP: no Gemini auth token")
+	// 3. Gemini CLI subprocess — reads Google OAuth credentials from ~/.gemini/
+	fmt.Println("\n=== 3. Gemini (CLI subprocess) ===")
+	geminiConfigPath := filepath.Join(home, ".gemini")
+	if _, err := os.Stat(geminiConfigPath); err != nil {
+		fmt.Println("  SKIP: ~/.gemini not found (Gemini CLI not configured)")
 	} else {
-		// Set as API key to test — Google's genai SDK can use access_token
-		os.Setenv("GEMINI_API_KEY", geminiToken)
-		provider := llm.NewGeminiProvider(geminiToken)
+		provider := llm.NewGeminiProvider()
 		req.Model = "gemini-2-flash"
 		resp, err := provider.Complete(ctx, req)
 		if err != nil {
@@ -87,18 +82,4 @@ func main() {
 	}
 
 	fmt.Println("\n=== Done ===")
-}
-
-func readGeminiToken(path string) string {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var creds struct {
-		AccessToken string `json:"access_token"`
-	}
-	if json.Unmarshal(data, &creds) != nil {
-		return ""
-	}
-	return creds.AccessToken
 }

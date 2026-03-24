@@ -10,12 +10,12 @@ func TestNewProvider_Claude(t *testing.T) {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p, err := NewProvider(name, ProviderConfig{})
+			p, err := NewProvider(name)
 			if err != nil {
 				t.Fatalf("NewProvider(%q) error: %v", name, err)
 			}
-			if p.Name() != "anthropic" {
-				t.Errorf("Name() = %q, want %q", p.Name(), "anthropic")
+			if p.Name() != "claude" {
+				t.Errorf("Name() = %q, want %q", p.Name(), "claude")
 			}
 		})
 	}
@@ -30,7 +30,7 @@ func TestNewProvider_Codex(t *testing.T) {
 		name := name
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p, err := NewProvider(name, ProviderConfig{})
+			p, err := NewProvider(name)
 			if err != nil {
 				t.Fatalf("NewProvider(%q) error: %v", name, err)
 			}
@@ -43,7 +43,7 @@ func TestNewProvider_Codex(t *testing.T) {
 
 func TestNewProvider_Gemini(t *testing.T) {
 	t.Parallel()
-	p, err := NewProvider("gemini", ProviderConfig{GeminiAPIKey: "test-key"})
+	p, err := NewProvider("gemini")
 	if err != nil {
 		t.Fatalf("NewProvider(\"gemini\") error: %v", err)
 	}
@@ -54,23 +54,8 @@ func TestNewProvider_Gemini(t *testing.T) {
 
 func TestNewProvider_Unknown(t *testing.T) {
 	t.Parallel()
-	_, err := NewProvider("unknown-llm", ProviderConfig{})
+	_, err := NewProvider("unknown-llm")
 	if err == nil {
 		t.Fatal("NewProvider(\"unknown-llm\") expected error, got nil")
-	}
-}
-
-func TestNewProvider_AnthropicOAuthFallback(t *testing.T) {
-	t.Parallel()
-	// A non-existent path should fall back to the API-key-based provider
-	// without returning an error.
-	p, err := NewProvider("claude", ProviderConfig{
-		AnthropicOAuthPath: "/non/existent/path/.credentials.json",
-	})
-	if err != nil {
-		t.Fatalf("NewProvider with bad oauth path error: %v", err)
-	}
-	if p.Name() != "anthropic" {
-		t.Errorf("Name() = %q, want %q", p.Name(), "anthropic")
 	}
 }

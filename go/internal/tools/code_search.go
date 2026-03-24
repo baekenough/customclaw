@@ -4,27 +4,32 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/baekenough/customclaw/internal/llm"
 )
 
 const (
-	codeSearchModel   = "claude-sonnet-4-20250514"
-	codeSearchMaxLen  = 4000
-	codeSearchMaxToks = 2048
+	codeSearchMaxLen = 4000
 )
 
-// SearchCodeTool performs code-aware search using the Anthropic SDK directly.
+// SearchCodeTool performs code-aware search using the configured LLM provider.
 // It creates a focused LLM request with the query as the user message.
 type SearchCodeTool struct {
-	client anthropic.Client
+	provider llm.Provider
 }
 
-// NewSearchCodeTool constructs a SearchCodeTool.
-// The ANTHROPIC_API_KEY environment variable is read automatically.
+// NewSearchCodeTool constructs a SearchCodeTool backed by the Claude CLI
+// subprocess provider. The CLI binary path is read from CLAUDE_CLI_PATH
+// (default: "claude").
 func NewSearchCodeTool() *SearchCodeTool {
 	return &SearchCodeTool{
-		client: anthropic.NewClient(),
+		provider: llm.NewClaudeProvider(),
 	}
+}
+
+// NewSearchCodeToolWithProvider constructs a SearchCodeTool with an explicit
+// provider. This is primarily useful for testing.
+func NewSearchCodeToolWithProvider(p llm.Provider) *SearchCodeTool {
+	return &SearchCodeTool{provider: p}
 }
 
 func (t *SearchCodeTool) Definition() ToolDefinition {
@@ -70,27 +75,16 @@ func (t *SearchCodeTool) ExecuteWithContext(ctx context.Context, args map[string
 		system += fmt.Sprintf(" The repository is located at: %s", repoPath)
 	}
 
-	msg, err := t.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.Model(codeSearchModel),
-		MaxTokens: codeSearchMaxToks,
-		System: []anthropic.TextBlockParam{
-			{Text: system},
-		},
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(query)),
-		},
+	resp, err := t.provider.Complete(ctx, &llm.Request{
+		SystemPrompt: system,
+		UserMessage:  query,
+		Model:        "sonnet",
 	})
 	if err != nil {
 		return ToolResult{IsError: true, Content: fmt.Sprintf("code search LLM call failed: %v", err)}
 	}
 
-	var text string
-	for _, block := range msg.Content {
-		if tb, ok := block.AsAny().(anthropic.TextBlock); ok {
-			text += tb.Text
-		}
-	}
-
+	text := resp.Text
 	if len(text) > codeSearchMaxLen {
 		text = text[:codeSearchMaxLen] + "\n...[truncated]"
 	}

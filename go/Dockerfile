@@ -26,10 +26,23 @@ COPY --from=builder /bin/app /usr/local/bin/app
 # Default to worker; override with entrypoint in docker-compose
 ENTRYPOINT ["worker"]
 
-# Auth and CLI mounts — configure via docker-compose volumes:
+# All LLM providers use CLI subprocess (goroutine-based async concurrency).
+# Mount the CLI binaries and credential directories via docker-compose volumes:
 #
-# Claude:  mount ~/.claude/.credentials.json (OAuth auto-refresh)
-#          OR set ANTHROPIC_API_KEY env var
-# Codex:   mount the static Rust binary to /usr/local/bin/codex:ro
-#          + mount ~/.codex for OAuth tokens
-# Gemini:  set GEMINI_API_KEY env var (SDK direct, no CLI)
+# Claude CLI:
+#   - mount claude binary to /usr/local/bin/claude:ro
+#   - mount ${CLAUDE_CONFIG_DIR} to ${CONTAINER_HOME}/.claude
+#   - mount ${CLAUDE_CREDENTIALS_FILE} to ${CONTAINER_HOME}/.claude.json
+#   - set CLAUDE_CLI_PATH=/usr/local/bin/claude (or rely on PATH default)
+#
+# Codex CLI (static Rust binary):
+#   - mount the platform binary to /usr/local/bin/codex:ro
+#   - mount ${CODEX_CONFIG_DIR} to ${CONTAINER_HOME}/.codex
+#   - set CODEX_CLI_PATH=/usr/local/bin/codex (or rely on PATH default)
+#
+# Gemini CLI (optional):
+#   - mount gemini binary to /usr/local/bin/gemini:ro
+#   - set GEMINI_CLI_PATH=/usr/local/bin/gemini (or rely on PATH default)
+#
+# Set CONTAINER_HOME to the appuser home directory (/home/appuser) so that
+# all CLI binaries can locate their credential files inside the container.

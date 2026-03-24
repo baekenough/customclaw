@@ -1,166 +1,199 @@
 package llm
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
 )
 
-// modelAliases maps short friendly names to Anthropic model IDs.
-var modelAliases = map[string]string{
-	"opus":   "claude-opus-4-20250514",
-	"sonnet": "claude-sonnet-4-20250514",
-	"haiku":  "claude-haiku-4-5-20251001",
+// claudeModelAliases maps short friendly names to Claude CLI model IDs.
+// Unknown aliases are passed through unchanged.
+var claudeModelAliases = map[string]string{
+	"opus":   "opus",
+	"sonnet": "sonnet",
+	"haiku":  "haiku",
 }
 
-// modelMaxTokens maps resolved model IDs to their maximum output token limits.
-// Values are sourced from the Anthropic documentation. When a model is not
-// present, defaultMaxTokens is used as a safe conservative fallback.
-var modelMaxTokens = map[string]int64{
-	"claude-opus-4-20250514":      8192,
-	"claude-sonnet-4-20250514":    8192,
-	"claude-haiku-4-5-20251001":   4096, // haiku max is 4 096
-	"claude-3-5-haiku-20241022":   4096,
-	"claude-3-5-sonnet-20241022":  8192,
-	"claude-3-opus-20240229":      4096,
-}
-
-// defaultMaxTokens is used when a model is not found in modelMaxTokens.
-const defaultMaxTokens int64 = 4096
-
-// maxTokensForModel returns the safe maximum output token count for modelID.
-func maxTokensForModel(modelID string) int64 {
-	if n, ok := modelMaxTokens[modelID]; ok {
-		return n
-	}
-	return defaultMaxTokens
-}
-
-// resolveModel returns the full Anthropic model ID for a given alias or passthrough.
-func resolveModel(alias string) string {
-	if full, ok := modelAliases[alias]; ok {
-		return full
-	}
+// resolveClaudeModel returns the Claude CLI model name for a given alias.
+// If the alias is not found in the map and is non-empty, it is returned as-is.
+// An empty alias falls back to "sonnet".
+func resolveClaudeModel(alias string) string {
 	if alias == "" {
-		return modelAliases["sonnet"]
+		return "sonnet"
+	}
+	if m, ok := claudeModelAliases[alias]; ok {
+		return m
 	}
 	return alias
 }
 
-// AnthropicProvider implements Provider using the official Anthropic SDK.
-type AnthropicProvider struct {
-	// client is a value type (not a pointer) per the SDK design.
-	client anthropic.Client
-	// tokenSource is non-nil when using OAuth token auth instead of a static API key.
-	tokenSource *OAuthTokenSource
+// ClaudeProvider implements Provider by calling the Claude CLI binary.
+// Authentication is handled by the CLI itself via its own OAuth credentials,
+// making the Anthropic REST API SDK unnecessary.
+type ClaudeProvider struct {
+	cliPath string
 }
 
-// NewAnthropicProvider constructs an AnthropicProvider.
-// The ANTHROPIC_API_KEY environment variable is read automatically via
-// anthropic.DefaultClientOptions().
-func NewAnthropicProvider(opts ...option.RequestOption) *AnthropicProvider {
-	return &AnthropicProvider{
-		client: anthropic.NewClient(opts...),
+// NewClaudeProvider constructs a ClaudeProvider. The CLI binary path is read
+// from the CLAUDE_CLI_PATH environment variable; it defaults to "claude"
+// (resolved via PATH at execution time).
+func NewClaudeProvider() *ClaudeProvider {
+	path := os.Getenv("CLAUDE_CLI_PATH")
+	if path == "" {
+		path = "claude"
 	}
+	return &ClaudeProvider{cliPath: path}
 }
 
-// NewAnthropicProviderWithOAuth creates an AnthropicProvider that uses
-// Claude Code OAuth tokens. The token is fetched (and refreshed as needed)
-// before every API call.
-func NewAnthropicProviderWithOAuth(tokenSource *OAuthTokenSource) *AnthropicProvider {
-	token, err := tokenSource.Token()
-	if err != nil {
-		slog.Warn("oauth: could not obtain initial token", "error", err)
-	}
-	return &AnthropicProvider{
-		client:      anthropic.NewClient(option.WithAuthToken(token)),
-		tokenSource: tokenSource,
-	}
-}
+// Name returns "claude".
+func (p *ClaudeProvider) Name() string { return "claude" }
 
-// Name returns "anthropic".
-func (p *AnthropicProvider) Name() string { return "anthropic" }
-
-// Complete sends a request to the Anthropic Messages API and returns the response.
-// Tool-use blocks are noted in the log but not executed in Phase 1; Phase 2 will
-// wire up the ToolRegistry here.
+// Complete invokes the Claude CLI as a subprocess and returns its output.
 //
-// When an OAuthTokenSource is configured, the token is refreshed before each
-// call so that long-running workers never hit auth failures mid-session.
-func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
-	if p.tokenSource != nil {
-		token, err := p.tokenSource.Token()
-		if err != nil {
-			slog.Warn("oauth: token refresh failed, proceeding with current token", "error", err)
-		} else {
-			// Recreate the client with the fresh token for this call.
-			p.client = anthropic.NewClient(option.WithAuthToken(token))
-		}
+// The command executed is:
+//
+//	claude -p <prompt> --model <model> --max-turns <n> --output-format json
+//
+// When FullAgent is true, --dangerously-skip-permissions is added and the
+// timeout is extended proportionally to max_turns.
+//
+// HOME is set from CONTAINER_HOME so the CLI can locate its OAuth credentials
+// inside the container. NO_COLOR=1 suppresses ANSI escape sequences.
+func (p *ClaudeProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
+	model := resolveClaudeModel(req.Model)
+	maxTurns := req.MaxTurns
+	if maxTurns == 0 {
+		maxTurns = 3
 	}
 
-	modelID := resolveModel(req.Model)
-	maxTok := maxTokensForModel(modelID)
-
-	params := anthropic.MessageNewParams{
-		Model:     anthropic.Model(modelID),
-		MaxTokens: maxTok,
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(req.UserMessage)),
-		},
-	}
+	// Build combined prompt: the Claude CLI takes a single -p argument.
+	prompt := req.UserMessage
 	if req.SystemPrompt != "" {
-		params.System = []anthropic.TextBlockParam{
-			{Text: req.SystemPrompt},
-		}
+		prompt = req.SystemPrompt + "\n\n" + req.UserMessage
 	}
 
-	slog.Debug("anthropic request",
-		"model", modelID,
-		"max_tokens", maxTok,
-		"system_len", len(req.SystemPrompt),
-		"user_len", len(req.UserMessage),
+	args := []string{
+		"-p", prompt,
+		"--model", model,
+		"--max-turns", fmt.Sprintf("%d", maxTurns),
+		"--output-format", "json",
+	}
+
+	timeout := 180 // default seconds
+	if req.FullAgent {
+		args = append(args, "--dangerously-skip-permissions")
+		timeout = maxTurns * 60
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(execCtx, p.cliPath, args...)
+
+	// Build environment: inherit host env, override HOME for container
+	// credential resolution, suppress colour output.
+	env := os.Environ()
+	if containerHome := os.Getenv("CONTAINER_HOME"); containerHome != "" {
+		env = appendOrReplace(env, "HOME="+containerHome)
+	}
+	env = appendOrReplace(env, "NO_COLOR=1")
+	cmd.Env = env
+
+	if req.WorkDir != "" {
+		cmd.Dir = req.WorkDir
+	}
+	cmd.Stdin = nil // equivalent to subprocess.DEVNULL
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	slog.Info("running claude cli",
+		"model", model,
+		"max_turns", maxTurns,
+		"full_agent", req.FullAgent,
 	)
 
-	msg, err := p.client.Messages.New(ctx, params)
-	if err != nil {
-		slog.Error("anthropic api error",
-			"model", modelID,
-			"max_tokens", maxTok,
-			"system_empty", req.SystemPrompt == "",
-			"error", err,
-		)
-		return nil, fmt.Errorf("anthropic messages.new: %w", err)
+	if err := cmd.Run(); err != nil {
+		errMsg := stderr.String()
+		if len(errMsg) > 500 {
+			errMsg = errMsg[:500]
+		}
+		return nil, fmt.Errorf("claude cli error (exit %v): %s", err, errMsg)
 	}
 
-	text := extractText(msg)
+	output := strings.TrimSpace(stdout.String())
+	if output == "" {
+		return nil, fmt.Errorf("claude cli returned empty output")
+	}
 
-	usage := &UsageInfo{
-		InputTokens:         int(msg.Usage.InputTokens),
-		OutputTokens:        int(msg.Usage.OutputTokens),
-		CacheReadTokens:     int(msg.Usage.CacheReadInputTokens),
-		CacheCreationTokens: int(msg.Usage.CacheCreationInputTokens),
-		Model:               string(msg.Model),
+	text, usage := parseClaudeJSONOutput(output)
+	if text == "" {
+		return nil, fmt.Errorf("claude cli returned no result text")
 	}
 
 	return &Response{Text: text, Usage: usage}, nil
 }
 
-// extractText concatenates all text blocks from the message content.
-// Uses ContentBlockUnion.AsAny() for safe type dispatch per the SDK's design.
-func extractText(msg *anthropic.Message) string {
-	var result string
-	for _, block := range msg.Content {
-		switch b := block.AsAny().(type) {
-		case anthropic.TextBlock:
-			result += b.Text
-		case anthropic.ToolUseBlock:
-			// Phase 1: tool-use blocks are acknowledged but not executed.
-			// Phase 2 will wire up ToolRegistry execution here.
-			_ = b
+// parseClaudeJSONOutput parses Claude CLI --output-format json response.
+// Returns (text, usage). On parse failure the raw output is returned as plain text.
+func parseClaudeJSONOutput(raw string) (string, *UsageInfo) {
+	var data map[string]any
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		// Not JSON — return raw output as plain text (e.g. plain-text mode).
+		return raw, nil
+	}
+
+	result, ok := data["result"].(string)
+	if !ok {
+		// Detect CLI status/error JSON (type=result but no result text).
+		if dataType, _ := data["type"].(string); dataType == "result" {
+			subtype, _ := data["subtype"].(string)
+			if subtype == "error_max_turns" {
+				slog.Warn("claude cli hit max_turns limit")
+			}
+			return "", extractUsageFromCLIJSON(data)
+		}
+		return raw, nil
+	}
+
+	usage := extractUsageFromCLIJSON(data)
+	return result, usage
+}
+
+// extractUsageFromCLIJSON extracts token usage and cost from a parsed Claude
+// CLI JSON response. Returns a non-nil UsageInfo even when no usage fields are present.
+func extractUsageFromCLIJSON(data map[string]any) *UsageInfo {
+	info := &UsageInfo{}
+	if u, ok := data["usage"].(map[string]any); ok {
+		if v, ok := u["input_tokens"].(float64); ok {
+			info.InputTokens = int(v)
+		}
+		if v, ok := u["output_tokens"].(float64); ok {
+			info.OutputTokens = int(v)
+		}
+		if v, ok := u["cache_read_input_tokens"].(float64); ok {
+			info.CacheReadTokens = int(v)
+		}
+		if v, ok := u["cache_creation_input_tokens"].(float64); ok {
+			info.CacheCreationTokens = int(v)
 		}
 	}
-	return result
+	if v, ok := data["total_cost_usd"].(float64); ok {
+		info.CostUSD = &v
+	}
+	// modelUsage maps model ID → usage breakdown; take the first key as Model.
+	if mu, ok := data["modelUsage"].(map[string]any); ok {
+		for modelID := range mu {
+			info.Model = modelID
+			break
+		}
+	}
+	return info
 }

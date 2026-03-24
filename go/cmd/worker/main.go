@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -82,55 +81,30 @@ func run() error {
 		botsMap[cfg.ID] = cfg
 	}
 
-	// LLM providers — build all providers at startup and select per-message
-	// based on each bot's configured provider name.
-	//
-	// Anthropic auth priority:
-	//   1. ANTHROPIC_API_KEY env var  (direct API key, SDK reads it automatically)
-	//   2. CLAUDE_CREDENTIALS_PATH env var (OAuth credentials file path)
-	//   3. Default OAuth path: ~/.claude/.credentials.json
-	var anthropicProvider llm.Provider
-	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
-		anthropicProvider = llm.NewAnthropicProvider() // SDK picks up ANTHROPIC_API_KEY
-	} else {
-		credPath := os.Getenv("CLAUDE_CREDENTIALS_PATH")
-		if credPath == "" {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return fmt.Errorf("resolve home dir for oauth credentials: %w", err)
-			}
-			credPath = filepath.Join(home, ".claude", ".credentials.json")
-		}
-		tokenSource, err := llm.NewOAuthTokenSource(credPath)
-		if err != nil {
-			return fmt.Errorf("no ANTHROPIC_API_KEY and oauth credentials not available at %s: %w", credPath, err)
-		}
-		tokenSource.StartPeriodicRefresh(ctx)
-		slog.Info("using OAuth token from credentials file", "path", credPath)
-		anthropicProvider = llm.NewAnthropicProviderWithOAuth(tokenSource)
-	}
-
-	// Codex provider — shells out to the Codex CLI subprocess.
-	// Codex uses ChatGPT OAuth and cannot use the OpenAI REST API SDK.
-	// CLI binary path: CODEX_CLI_PATH env var (default: "codex").
-	// HOME inside the container: CONTAINER_HOME env var.
+	// LLM providers — all use CLI subprocess execution.
+	// Authentication is handled by each CLI binary's own credential management.
+	// CLI binary paths are configured via environment variables:
+	//   CLAUDE_CLI_PATH (default: "claude")
+	//   CODEX_CLI_PATH  (default: "codex")
+	//   GEMINI_CLI_PATH (default: "gemini")
+	// HOME inside the container is set via CONTAINER_HOME env var.
+	claudeProvider := llm.NewClaudeProvider()
 	codexProvider := llm.NewCodexProvider()
-
-	// Gemini provider. Reads GEMINI_API_KEY automatically.
-	geminiProvider := llm.NewGeminiProvider("")
+	geminiProvider := llm.NewGeminiProvider()
 
 	// Provider registry: keyed by canonical provider name.
 	// Aliases ("claude", "codex", "openai") are resolved in selectProvider.
 	providers := map[string]llm.Provider{
-		"anthropic": anthropicProvider,
+		"claude":    claudeProvider,
+		"anthropic": claudeProvider, // "anthropic" is an alias for Claude CLI
 		"codex":     codexProvider,
 		"openai":    codexProvider, // "openai" is an alias for the Codex CLI provider
 		"gemini":    geminiProvider,
 	}
 
-	// Keep a reference to the default provider for backwards-compatible
+	// Keep a reference to the default provider (Claude) for backwards-compatible
 	// code paths that still hold a single llm.Provider reference.
-	provider := anthropicProvider
+	provider := claudeProvider
 
 	// Memory subsystem.
 	store, err := memory.NewMessageStore(ctx, databaseDSN)
@@ -168,7 +142,7 @@ func run() error {
 	proc := worker.NewProcessorWithProviders(
 		botsMap,
 		providers,
-		provider, // default: Anthropic
+		provider, // default: Claude CLI
 		store,
 		search,
 		registry,
@@ -249,7 +223,7 @@ func buildToolRegistry() *tools.Registry {
 	registry.Register(&tools.ListDagsTool{})
 	registry.Register(&tools.TriggerDagTool{})
 
-	// Code search (uses Anthropic SDK directly).
+	// Code search (uses Claude CLI subprocess via llm.Provider).
 	registry.Register(tools.NewSearchCodeTool())
 
 	// Bot management tools.
