@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -30,6 +31,8 @@ func resolveModel(alias string) string {
 type AnthropicProvider struct {
 	// client is a value type (not a pointer) per the SDK design.
 	client anthropic.Client
+	// tokenSource is non-nil when using OAuth token auth instead of a static API key.
+	tokenSource *OAuthTokenSource
 }
 
 // NewAnthropicProvider constructs an AnthropicProvider.
@@ -41,13 +44,40 @@ func NewAnthropicProvider(opts ...option.RequestOption) *AnthropicProvider {
 	}
 }
 
+// NewAnthropicProviderWithOAuth creates an AnthropicProvider that uses
+// Claude Code OAuth tokens. The token is fetched (and refreshed as needed)
+// before every API call.
+func NewAnthropicProviderWithOAuth(tokenSource *OAuthTokenSource) *AnthropicProvider {
+	token, err := tokenSource.Token()
+	if err != nil {
+		slog.Warn("oauth: could not obtain initial token", "error", err)
+	}
+	return &AnthropicProvider{
+		client:      anthropic.NewClient(option.WithAPIKey(token)),
+		tokenSource: tokenSource,
+	}
+}
+
 // Name returns "anthropic".
 func (p *AnthropicProvider) Name() string { return "anthropic" }
 
 // Complete sends a request to the Anthropic Messages API and returns the response.
 // Tool-use blocks are noted in the log but not executed in Phase 1; Phase 2 will
 // wire up the ToolRegistry here.
+//
+// When an OAuthTokenSource is configured, the token is refreshed before each
+// call so that long-running workers never hit auth failures mid-session.
 func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
+	if p.tokenSource != nil {
+		token, err := p.tokenSource.Token()
+		if err != nil {
+			slog.Warn("oauth: token refresh failed, proceeding with current token", "error", err)
+		} else {
+			// Recreate the client with the fresh token for this call.
+			p.client = anthropic.NewClient(option.WithAPIKey(token))
+		}
+	}
+
 	modelID := resolveModel(req.Model)
 
 	params := anthropic.MessageNewParams{

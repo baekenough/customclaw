@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
@@ -81,8 +82,30 @@ func run() error {
 		botsMap[cfg.ID] = cfg
 	}
 
-	// LLM provider
-	provider := llm.NewAnthropicProvider()
+	// LLM provider — auth priority:
+	//   1. ANTHROPIC_API_KEY env var  (direct API key, SDK reads it automatically)
+	//   2. CLAUDE_CREDENTIALS_PATH env var (OAuth credentials file path)
+	//   3. Default OAuth path: ~/.claude/.credentials.json
+	var provider llm.Provider
+	if apiKey := os.Getenv("ANTHROPIC_API_KEY"); apiKey != "" {
+		provider = llm.NewAnthropicProvider() // SDK picks up ANTHROPIC_API_KEY
+	} else {
+		credPath := os.Getenv("CLAUDE_CREDENTIALS_PATH")
+		if credPath == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return fmt.Errorf("resolve home dir for oauth credentials: %w", err)
+			}
+			credPath = filepath.Join(home, ".claude", ".credentials.json")
+		}
+		tokenSource, err := llm.NewOAuthTokenSource(credPath)
+		if err != nil {
+			return fmt.Errorf("no ANTHROPIC_API_KEY and oauth credentials not available at %s: %w", credPath, err)
+		}
+		tokenSource.StartPeriodicRefresh(ctx)
+		slog.Info("using OAuth token from credentials file", "path", credPath)
+		provider = llm.NewAnthropicProviderWithOAuth(tokenSource)
+	}
 
 	// Memory subsystem.
 	store, err := memory.NewMessageStore(ctx, databaseDSN)
