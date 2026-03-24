@@ -874,22 +874,26 @@ export default function DashboardPage() {
                     <YAxis fontSize={12} tickLine={false} axisLine={false} />
                     <Tooltip content={<CustomTooltip />} />
                     <Area
-                      type="monotone"
+                      type="linear"
                       dataKey="messages"
                       name="메시지"
                       stroke={CHART_COLORS.primary}
                       fillOpacity={1}
                       fill="url(#colorMessages)"
                       strokeWidth={2}
+                      dot={{ r: 3, fill: CHART_COLORS.primary, strokeWidth: 0 }}
+                      activeDot={{ r: 5, fill: CHART_COLORS.primary, strokeWidth: 0 }}
                     />
                     <Area
-                      type="monotone"
+                      type="linear"
                       dataKey="botMessages"
                       name="봇 응답"
                       stroke={CHART_COLORS.secondary}
                       fillOpacity={1}
                       fill="url(#colorBotMessages)"
                       strokeWidth={2}
+                      dot={{ r: 3, fill: CHART_COLORS.secondary, strokeWidth: 0 }}
+                      activeDot={{ r: 5, fill: CHART_COLORS.secondary, strokeWidth: 0 }}
                     />
                   </AreaChart>
                 </ResponsiveContainer>
