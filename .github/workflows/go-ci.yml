@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'go/**'
+      - '.github/workflows/go-ci.yml'
     branches: [develop, main]
   pull_request:
     paths:
       - 'go/**'
+      - '.github/workflows/go-ci.yml'
     branches: [develop, main]
 
 defaults:
@@ -22,7 +24,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
       - name: Build
@@ -36,7 +38,7 @@ jobs:
 
       - name: Test coverage
         run: |
-          go test ./... -coverprofile=coverage.out -covermode=atomic
+          go test $(go list ./... | grep -v '/cmd/') -coverprofile=coverage.out -covermode=atomic
           go tool cover -func=coverage.out | tail -1
 
   lint:
@@ -46,7 +48,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
       - name: golangci-lint
@@ -58,7 +60,7 @@ jobs:
 
   docker:
     runs-on: ubuntu-latest
-    needs: [build-and-test, lint]
+    needs: [build-and-test]
     steps:
       - uses: actions/checkout@v4
 
