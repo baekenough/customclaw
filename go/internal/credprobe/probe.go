@@ -163,7 +163,7 @@ func checkOpenAI(ctx context.Context) checkResult {
 		}
 		return checkResult{"error", err.Error()}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
@@ -205,7 +205,7 @@ func checkGemini(ctx context.Context) checkResult {
 		}
 		return checkResult{"error", err.Error()}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
@@ -310,7 +310,7 @@ func sendSlackAlert(provider, errMsg string) {
 		slog.Error("credential probe: Slack API request failed", "error", err)
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
