@@ -13,6 +13,7 @@ import (
 
 	"github.com/baekenough/customclaw/internal/analysis"
 	"github.com/baekenough/customclaw/internal/config"
+	"github.com/baekenough/customclaw/internal/credprobe"
 	"github.com/baekenough/customclaw/internal/llm"
 	"github.com/baekenough/customclaw/internal/memory"
 	"github.com/baekenough/customclaw/internal/platform"
@@ -175,6 +176,10 @@ func run() error {
 			slog.Info("message processed", "bot", msg.BotID, "response_len", len(resp))
 		},
 	)
+
+	// Credential probe — periodically checks LLM provider credentials and
+	// stores results in the credential_status table. Fixes issue #32.
+	credprobe.Start(ctx, store.Pool())
 
 	// Analysis consumer — processes GitHub issue/PR analysis requests.
 	if err := rediswrapper.EnsureStreamGroup(ctx, rdb, analysis.AnalysisStream, analysis.AnalysisGroup); err != nil {

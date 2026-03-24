@@ -30,8 +30,11 @@ export async function POST(request: NextRequest) {
     const {
       id,
       name,
+      platform,
       slackAppToken,
       slackBotToken,
+      discord,
+      mattermost,
       channels,
       persona,
       project,
@@ -43,9 +46,26 @@ export async function POST(request: NextRequest) {
       isActive,
     } = body;
 
-    if (!id || !name || !slackAppToken || !slackBotToken) {
+    const resolvedPlatform = platform ?? "slack";
+
+    if (!id || !name) {
+      return Response.json({ error: "id and name are required" }, { status: 400 });
+    }
+    if (resolvedPlatform === "slack" && (!slackAppToken || !slackBotToken)) {
       return Response.json(
-        { error: "id, name, slackAppToken, slackBotToken are required" },
+        { error: "slackAppToken and slackBotToken are required for Slack bots" },
+        { status: 400 }
+      );
+    }
+    if (resolvedPlatform === "discord" && !discord?.token) {
+      return Response.json(
+        { error: "discord.token is required for Discord bots" },
+        { status: 400 }
+      );
+    }
+    if (resolvedPlatform === "mattermost" && (!mattermost?.url || !mattermost?.token)) {
+      return Response.json(
+        { error: "mattermost.url and mattermost.token are required for Mattermost bots" },
         { status: 400 }
       );
     }
@@ -54,8 +74,11 @@ export async function POST(request: NextRequest) {
       data: {
         id,
         name,
-        slackAppToken,
-        slackBotToken,
+        platform: resolvedPlatform,
+        slackAppToken: slackAppToken ?? "",
+        slackBotToken: slackBotToken ?? "",
+        ...(discord !== undefined && { discord }),
+        ...(mattermost !== undefined && { mattermost }),
         channels: channels ?? [],
         persona: persona ?? {},
         project: project ?? {},
