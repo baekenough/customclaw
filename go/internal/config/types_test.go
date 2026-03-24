@@ -16,7 +16,7 @@ func TestBotConfigDefaults_ZeroValue(t *testing.T) {
 		{"Platform", cfg.Platform, "slack"},
 		{"Claude.Provider", cfg.Claude.Provider, "claude"},
 		{"Claude.Model", cfg.Claude.Model, "sonnet"},
-		{"Claude.MaxTurns", cfg.Claude.MaxTurns, 10},
+		{"Claude.MaxTurns", cfg.Claude.MaxTurns, 5},
 		{"Memory.ContextWindow", cfg.Memory.ContextWindow, 20},
 		{"Mattermost.Port", cfg.Mattermost.Port, 8065},
 	}

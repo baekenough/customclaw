@@ -34,10 +34,19 @@ import { buttonVariants } from "@/components/ui/button";
 interface BotData {
   id: string;
   name: string;
+  platform?: string;
   isActive: boolean;
   channels: string[];
+  security?: { allowed_channels?: string[] };
   claude: { provider?: string; model?: string };
   createdAt: string;
+}
+
+function getChannelCount(bot: BotData): number {
+  if (bot.channels?.length > 0) return bot.channels.length;
+  if ((bot.security?.allowed_channels?.length ?? 0) > 0)
+    return bot.security!.allowed_channels!.length;
+  return 0;
 }
 
 export default function BotsPage() {
@@ -173,10 +182,7 @@ export default function BotsPage() {
                     </TableCell>
                     <TableCell>
                       <span className="text-sm text-muted-foreground">
-                        {Array.isArray(bot.channels)
-                          ? bot.channels.length
-                          : 0}
-                        개
+                        {getChannelCount(bot)}개
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
