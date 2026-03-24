@@ -1,7 +1,12 @@
 const AIRFLOW_API_URL =
   process.env.AIRFLOW_API_URL || "http://airflow:8080/api/v2";
 
+let cachedToken: { token: string; expiresAt: number } | null = null;
+
 async function getAirflowToken(): Promise<string> {
+  if (cachedToken && Date.now() < cachedToken.expiresAt) {
+    return cachedToken.token;
+  }
   const baseUrl = AIRFLOW_API_URL.replace("/api/v2", "");
   const res = await fetch(`${baseUrl}/auth/token`, {
     method: "POST",
@@ -14,6 +19,7 @@ async function getAirflowToken(): Promise<string> {
   });
   if (!res.ok) throw new Error(`Airflow auth failed: ${res.status}`);
   const data = await res.json();
+  cachedToken = { token: data.access_token, expiresAt: Date.now() + 5 * 60 * 1000 };
   return data.access_token;
 }
 

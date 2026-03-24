@@ -91,7 +91,7 @@ func (c *BotConfig) defaults() {
 		c.Claude.Model = "sonnet"
 	}
 	if c.Claude.MaxTurns == 0 {
-		c.Claude.MaxTurns = 10
+		c.Claude.MaxTurns = 5
 	}
 	if c.Memory.ContextWindow == 0 {
 		c.Memory.ContextWindow = 20

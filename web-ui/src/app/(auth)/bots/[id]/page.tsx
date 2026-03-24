@@ -94,9 +94,9 @@ export default function BotDetailPage({
   const [githubRepo, setGithubRepo] = useState("");
   const [provider, setProvider] = useState<"claude" | "codex">("claude");
   const [model, setModel] = useState("");
-  const [maxTurns, setMaxTurns] = useState(10);
+  const [maxTurns, setMaxTurns] = useState(5);
   const [fullAgent, setFullAgent] = useState(false);
-  const [contextWindow, setContextWindow] = useState(50000);
+  const [contextWindow, setContextWindow] = useState(20);
   const [autoExtract, setAutoExtract] = useState(true);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [dangerousTools, setDangerousTools] = useState<string[]>([]);
@@ -119,9 +119,9 @@ export default function BotDetailPage({
         setGithubRepo(data.project?.github_repo ?? "");
         setProvider((data.claude?.provider as "claude" | "codex") ?? "claude");
         setModel(data.claude?.model ?? "claude-opus-4-5");
-        setMaxTurns(data.claude?.max_turns ?? 10);
+        setMaxTurns(data.claude?.max_turns ?? 5);
         setFullAgent(data.claude?.full_agent ?? false);
-        setContextWindow(data.memory?.context_window ?? 50000);
+        setContextWindow(data.memory?.context_window ?? 20);
         setAutoExtract(data.memory?.auto_extract ?? true);
         setEnabledTools(data.tools?.enabled ?? []);
         setDangerousTools(data.security?.dangerous_tools ?? []);
@@ -450,18 +450,18 @@ export default function BotDetailPage({
                   min={1}
                   max={100}
                   value={maxTurns}
-                  onChange={(e) => setMaxTurns(parseInt(e.target.value) || 10)}
+                  onChange={(e) => setMaxTurns(parseInt(e.target.value) || 5)}
                   className="h-9 text-sm"
                 />
               </div>
               <div className="space-y-2">
-                <Label className="text-xs">컨텍스트 윈도우</Label>
+                <Label className="text-xs">컨텍스트 윈도우 (최근 메시지 수)</Label>
                 <Input
                   type="number"
-                  min={1000}
+                  min={1}
                   value={contextWindow}
                   onChange={(e) =>
-                    setContextWindow(parseInt(e.target.value) || 50000)
+                    setContextWindow(parseInt(e.target.value) || 20)
                   }
                   className="h-9 text-sm"
                 />

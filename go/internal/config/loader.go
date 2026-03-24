@@ -134,7 +134,7 @@ func LoadBotFromYAML(path string) (*BotConfig, error) {
 		Claude: ClaudeConfig{
 			Provider:  stringField(raw.Claude, "provider"),
 			Model:     stringField(raw.Claude, "model"),
-			MaxTurns:  intField(raw.Claude, "max_turns", 10),
+			MaxTurns:  intField(raw.Claude, "max_turns", 5),
 			FullAgent: boolField(raw.Claude, "full_agent", false),
 		},
 		Memory: MemoryConfig{
@@ -255,7 +255,7 @@ func scanBotRow(rows pgx.Rows) (*BotConfig, error) {
 		Claude: ClaudeConfig{
 			Provider:  stringField(claude, "provider"),
 			Model:     stringField(claude, "model"),
-			MaxTurns:  intField(claude, "max_turns", 10),
+			MaxTurns:  intField(claude, "max_turns", 5),
 			FullAgent: boolField(claude, "full_agent", false),
 		},
 		Memory: MemoryConfig{

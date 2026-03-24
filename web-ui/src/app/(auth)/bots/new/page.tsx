@@ -60,9 +60,9 @@ export default function NewBotPage() {
   const [githubRepo, setGithubRepo] = useState("");
   const [provider, setProvider] = useState<"claude" | "codex">("claude");
   const [model, setModel] = useState("claude-opus-4-5");
-  const [maxTurns, setMaxTurns] = useState(10);
+  const [maxTurns, setMaxTurns] = useState(5);
   const [fullAgent, setFullAgent] = useState(false);
-  const [contextWindow, setContextWindow] = useState(50000);
+  const [contextWindow, setContextWindow] = useState(20);
   const [autoExtract, setAutoExtract] = useState(true);
   const [enabledTools, setEnabledTools] = useState<string[]>([]);
   const [selectedDangerousTools, setSelectedDangerousTools] = useState<
@@ -359,21 +359,21 @@ export default function NewBotPage() {
                   min={1}
                   max={100}
                   value={maxTurns}
-                  onChange={(e) => setMaxTurns(parseInt(e.target.value) || 10)}
+                  onChange={(e) => setMaxTurns(parseInt(e.target.value) || 5)}
                   className="h-9 text-sm"
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="context-window" className="text-xs">
-                  컨텍스트 윈도우
+                  컨텍스트 윈도우 (최근 메시지 수)
                 </Label>
                 <Input
                   id="context-window"
                   type="number"
-                  min={1000}
+                  min={1}
                   value={contextWindow}
                   onChange={(e) =>
-                    setContextWindow(parseInt(e.target.value) || 50000)
+                    setContextWindow(parseInt(e.target.value) || 20)
                   }
                   className="h-9 text-sm"
                 />
