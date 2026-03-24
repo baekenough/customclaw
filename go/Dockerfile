@@ -26,8 +26,10 @@ COPY --from=builder /bin/app /usr/local/bin/app
 # Default to worker; override with entrypoint in docker-compose
 ENTRYPOINT ["worker"]
 
-# OAuth credentials: mount ~/.claude/.credentials.json to /home/appuser/.claude/.credentials.json
-# Or set ANTHROPIC_API_KEY environment variable for direct API key auth
-# Example docker-compose volume mount:
-#   volumes:
-#     - ~/.claude/.credentials.json:/home/appuser/.claude/.credentials.json:ro
+# Auth and CLI mounts — configure via docker-compose volumes:
+#
+# Claude:  mount ~/.claude/.credentials.json (OAuth auto-refresh)
+#          OR set ANTHROPIC_API_KEY env var
+# Codex:   mount the static Rust binary to /usr/local/bin/codex:ro
+#          + mount ~/.codex for OAuth tokens
+# Gemini:  set GEMINI_API_KEY env var (SDK direct, no CLI)

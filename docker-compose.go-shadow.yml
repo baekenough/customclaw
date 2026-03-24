@@ -32,9 +32,11 @@ services:
       # Claude OAuth credentials (auto-refreshed by Go worker)
       - ${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude
       - ${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json
-      # Codex config (OpenAI SDK reads OPENAI_API_KEY from env)
-      - ${CODEX_CONFIG_DIR}:${CONTAINER_HOME}/.codex:ro
-      # Gemini config
+      # Codex CLI — static Rust binary (no Node.js needed)
+      - ${CODEX_PKG_DIR}/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl/codex/codex:/usr/local/bin/codex:ro
+      # Codex OAuth config
+      - ${CODEX_CONFIG_DIR}:${CONTAINER_HOME}/.codex
+      # Gemini config (for reference, SDK uses GEMINI_API_KEY)
       - ${GEMINI_CONFIG_DIR}:${CONTAINER_HOME}/.gemini:ro
     environment:
       DATABASE_DSN: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/customclaw
@@ -42,10 +44,12 @@ services:
       OPENSEARCH_URL: http://opensearch:9200
       BOTS_DIR: /app/bots
       HOME: ${CONTAINER_HOME}
-      # OAuth credentials path (Go worker auto-refreshes)
+      CONTAINER_HOME: ${CONTAINER_HOME}
+      # Claude OAuth
       CLAUDE_CREDENTIALS_PATH: ${CONTAINER_HOME}/.claude/.credentials.json
-      # Provider API keys (SDK direct calls, no CLI needed)
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Codex CLI
+      CODEX_CLI_PATH: /usr/local/bin/codex
+      # Gemini SDK
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       # Consumer group — same as Python worker for shadow mode

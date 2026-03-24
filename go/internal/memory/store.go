@@ -3,6 +3,7 @@ package memory
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -136,10 +138,10 @@ func (s *MessageStore) GetThreadMessages(
 		return nil, nil
 	}
 	const q = `
-		SELECT role, content, created_at
+		SELECT role, content, timestamp
 		FROM messages
 		WHERE bot_id = $1 AND channel_id = $2 AND thread_ts = $3
-		ORDER BY created_at DESC
+		ORDER BY timestamp DESC
 		LIMIT $4`
 	rows, err := s.pool.Query(ctx, q, botID, channelID, threadTS, limit)
 	if err != nil {
@@ -167,12 +169,12 @@ func (s *MessageStore) GetChannelMessages(
 		return nil, nil
 	}
 	const q = `
-		SELECT role, content, created_at
+		SELECT role, content, timestamp
 		FROM messages
 		WHERE bot_id = $1
 		  AND channel_id = $2
 		  AND (thread_ts IS NULL OR thread_ts = '' OR thread_ts != $3)
-		ORDER BY created_at DESC
+		ORDER BY timestamp DESC
 		LIMIT $4`
 	rows, err := s.pool.Query(ctx, q, botID, channelID, excludeThreadTS, limit)
 	if err != nil {
@@ -212,31 +214,15 @@ func (s *MessageStore) GetRecentMessages(
 // ---------------------------------------------------------------------------
 
 // GetHistory returns up to limit recent messages for key.
-// With a pool, it queries the history_key column; otherwise the in-memory
-// fallback is used.
+// The key is an opaque string from the processor (e.g. "thread:xxx" or
+// "channel:yyy"). The DB schema has no history_key column; instead we use
+// the in-memory fallback for all cases so the processor's key-based API
+// continues to work. Direct DB reads by composite key (bot_id, channel_id,
+// thread_ts) are available via GetThreadMessages / GetChannelMessages.
 func (s *MessageStore) GetHistory(ctx context.Context, key string, limit int) ([]Message, error) {
-	if s.pool != nil {
-		const q = `
-			SELECT role, content, created_at
-			FROM messages
-			WHERE history_key = $1
-			ORDER BY created_at DESC
-			LIMIT $2`
-		rows, err := s.pool.Query(ctx, q, key, limit)
-		if err != nil {
-			slog.Warn("GetHistory failed", "key", key, "error", err)
-			return nil, err
-		}
-		defer rows.Close()
-		msgs, err := scanMessages(rows)
-		if err != nil {
-			return nil, err
-		}
-		reverseMessages(msgs) // DESC → chronological
-		return msgs, nil
-	}
-
-	// in-memory fallback
+	// Always use the in-memory store for key-based access, regardless of
+	// whether a DB pool is configured. The DB is written to via SaveMessage
+	// which accepts explicit (bot_id, channel_id, thread_ts) coordinates.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	all := s.history[key]
@@ -250,21 +236,11 @@ func (s *MessageStore) GetHistory(ctx context.Context, key string, limit int) ([
 	return out, nil
 }
 
-// Append adds a message for key.
-// With a pool, it inserts a row; otherwise it appends to the in-memory store.
-func (s *MessageStore) Append(ctx context.Context, key string, msg Message) error {
-	if s.pool != nil {
-		const q = `
-			INSERT INTO messages (history_key, role, content)
-			VALUES ($1, $2, $3)`
-		if _, err := s.pool.Exec(ctx, q, key, msg.Role, msg.Content); err != nil {
-			slog.Warn("Append failed", "key", key, "error", err)
-			return err
-		}
-		return nil
-	}
-
-	// in-memory fallback
+// Append adds a message for key to the in-memory store.
+// The DB schema has no history_key column; processor-facing history writes
+// go to the in-memory store. Durable persistence is handled separately via
+// SaveMessage which accepts explicit (bot_id, channel_id, thread_ts) coords.
+func (s *MessageStore) Append(_ context.Context, key string, msg Message) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, exists := s.history[key]; !exists {
@@ -299,8 +275,8 @@ func (s *MessageStore) GetPreferences(ctx context.Context, botID string) ([]stri
 
 	const q = `
 		SELECT content
-		FROM bot_preferences
-		WHERE bot_id = $1
+		FROM memories
+		WHERE bot_id = $1 AND category = 'preference'
 		ORDER BY created_at DESC`
 	rows, err := s.pool.Query(ctx, q, botID)
 	if err != nil {
@@ -351,7 +327,7 @@ func (s *MessageStore) SearchMemories(
 	// Fetch a larger candidate pool then re-rank in Go.
 	const q = `
 		SELECT content, category, created_at
-		FROM bot_memories
+		FROM memories
 		WHERE bot_id = $1
 		ORDER BY created_at DESC
 		LIMIT $2`
@@ -390,10 +366,10 @@ func (s *MessageStore) SearchRecentMessages(
 		return nil, nil
 	}
 	const q = `
-		SELECT content, created_at
+		SELECT content, timestamp
 		FROM messages
 		WHERE bot_id = $1
-		ORDER BY created_at DESC
+		ORDER BY timestamp DESC
 		LIMIT $2`
 	rows, err := s.pool.Query(ctx, q, botID, lookback)
 	if err != nil {
@@ -421,6 +397,8 @@ func (s *MessageStore) SearchRecentMessages(
 }
 
 // MemoryExists reports whether a matching memory row already exists.
+// Case-insensitive, whitespace-trimmed comparison is used to avoid
+// near-duplicate entries.
 func (s *MessageStore) MemoryExists(
 	ctx context.Context,
 	botID, category, content string,
@@ -429,22 +407,28 @@ func (s *MessageStore) MemoryExists(
 		return false, nil
 	}
 	const q = `
-		SELECT EXISTS(
-			SELECT 1 FROM bot_memories
-			WHERE bot_id = $1 AND category = $2 AND content = $3
-		)`
-	var exists bool
-	if err := s.pool.QueryRow(ctx, q, botID, category, content).Scan(&exists); err != nil {
+		SELECT 1 FROM memories
+		WHERE bot_id = $1 AND category = $2 AND lower(trim(content)) = lower(trim($3))
+		LIMIT 1`
+	var found int
+	err := s.pool.QueryRow(ctx, q, botID, category, content).Scan(&found)
+	if err != nil {
+		// pgx returns pgx.ErrNoRows (which wraps sql.ErrNoRows) when SELECT 1
+		// finds no matching row. That is not an error — it means "does not exist".
+		if isNoRows(err) {
+			return false, nil
+		}
 		slog.Warn("MemoryExists failed", "error", err)
 		return false, err
 	}
-	return exists, nil
+	return true, nil
 }
 
-// StoreMemory persists a single extracted memory entry to bot_memories and
-// returns the generated UUID so the caller can use it for downstream indexing.
-// A zero-vector placeholder is stored for the embedding column until a proper
-// embedding pipeline is available.
+// StoreMemory persists a single extracted memory entry to the memories table
+// and returns the generated UUID so the caller can use it for downstream
+// indexing. A 1024-dimension zero-vector placeholder is stored for the
+// embedding column (matching the actual pgvector column definition) until a
+// proper embedding pipeline is available.
 // When pool is nil the operation is a no-op and an empty string is returned.
 func (s *MessageStore) StoreMemory(
 	ctx context.Context,
@@ -454,8 +438,8 @@ func (s *MessageStore) StoreMemory(
 		return "", nil
 	}
 	const q = `
-		INSERT INTO bot_memories (bot_id, user_id, category, content, embedding)
-		VALUES ($1, $2, $3, $4, array_fill(0, ARRAY[1536])::vector)
+		INSERT INTO memories (bot_id, user_id, category, content, embedding)
+		VALUES ($1, $2, $3, $4, array_fill(0, ARRAY[1024])::vector)
 		RETURNING id::text`
 	var id string
 	if err := s.pool.QueryRow(ctx, q, botID, userID, category, content).Scan(&id); err != nil {
@@ -568,6 +552,12 @@ func compactContent(content string, limit int) string {
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+// isNoRows reports whether err represents a "no rows" result from pgx.
+// pgx.ErrNoRows is returned by QueryRow.Scan when the query returns zero rows.
+func isNoRows(err error) bool {
+	return errors.Is(err, pgx.ErrNoRows)
+}
 
 // pgxRows is the minimal pgx.Rows subset used by scanMessages.
 type pgxRows interface {

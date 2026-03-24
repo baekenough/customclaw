@@ -6,7 +6,6 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.27.1
 	github.com/bwmarrin/discordgo v0.29.0
 	github.com/jackc/pgx/v5 v5.9.1
-	github.com/openai/openai-go v1.12.0
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/slack-go/slack v0.20.0
 	golang.org/x/sync v0.20.0

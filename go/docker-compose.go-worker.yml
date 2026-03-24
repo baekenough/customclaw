@@ -17,8 +17,18 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       MAX_CONCURRENT_WORKERS: "10"
       MERGE_WINDOW_SECONDS: "30"
+      # Codex CLI subprocess provider
+      CODEX_CLI_PATH: ${CODEX_CLI_PATH:-codex}
+      CONTAINER_HOME: /home/appuser
+      # Gemini API key
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
     volumes:
       - ../bots:/app/bots:ro
+      # Codex CLI: mount @openai/codex npm package so the Node.js launcher
+      # script can locate the platform-specific native binary.
+      # Set CODEX_PKG_DIR to the host path of the installed package, e.g.:
+      #   CODEX_PKG_DIR=$(npm root -g)/@openai/codex
+      - ${CODEX_PKG_DIR:-/usr/lib/node_modules/@openai/codex}:/usr/lib/node_modules/@openai/codex:ro
     entrypoint: ["worker"]
 
   go-app:

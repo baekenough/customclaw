@@ -110,17 +110,21 @@ func run() error {
 		anthropicProvider = llm.NewAnthropicProviderWithOAuth(tokenSource)
 	}
 
-	// OpenAI provider (codex replacement). Reads OPENAI_API_KEY automatically.
-	openaiProvider := llm.NewOpenAIProvider()
+	// Codex provider — shells out to the Codex CLI subprocess.
+	// Codex uses ChatGPT OAuth and cannot use the OpenAI REST API SDK.
+	// CLI binary path: CODEX_CLI_PATH env var (default: "codex").
+	// HOME inside the container: CONTAINER_HOME env var.
+	codexProvider := llm.NewCodexProvider()
 
 	// Gemini provider. Reads GEMINI_API_KEY automatically.
 	geminiProvider := llm.NewGeminiProvider("")
 
 	// Provider registry: keyed by canonical provider name.
-	// Aliases ("claude", "codex") are resolved in selectProvider.
+	// Aliases ("claude", "codex", "openai") are resolved in selectProvider.
 	providers := map[string]llm.Provider{
 		"anthropic": anthropicProvider,
-		"openai":    openaiProvider,
+		"codex":     codexProvider,
+		"openai":    codexProvider, // "openai" is an alias for the Codex CLI provider
 		"gemini":    geminiProvider,
 	}
 

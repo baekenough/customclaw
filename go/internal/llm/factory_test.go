@@ -21,8 +21,11 @@ func TestNewProvider_Claude(t *testing.T) {
 	}
 }
 
-func TestNewProvider_OpenAI(t *testing.T) {
+func TestNewProvider_Codex(t *testing.T) {
 	t.Parallel()
+	// Both "codex" and "openai" map to the Codex CLI subprocess provider.
+	// The provider Name() returns "codex" (not "openai") because the backing
+	// implementation uses the Codex CLI, not the OpenAI REST API SDK.
 	for _, name := range []string{"codex", "openai"} {
 		name := name
 		t.Run(name, func(t *testing.T) {
@@ -31,8 +34,8 @@ func TestNewProvider_OpenAI(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewProvider(%q) error: %v", name, err)
 			}
-			if p.Name() != "openai" {
-				t.Errorf("Name() = %q, want %q", p.Name(), "openai")
+			if p.Name() != "codex" {
+				t.Errorf("Name() = %q, want %q", p.Name(), "codex")
 			}
 		})
 	}

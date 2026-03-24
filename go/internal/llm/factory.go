@@ -10,8 +10,6 @@ type ProviderConfig struct {
 	// AnthropicOAuthPath is the path to a Claude Code .credentials.json file.
 	// When non-empty, it takes precedence over ANTHROPIC_API_KEY.
 	AnthropicOAuthPath string
-	// OpenAIAPIKey overrides the OPENAI_API_KEY environment variable.
-	OpenAIAPIKey string
 	// GeminiAPIKey overrides the GEMINI_API_KEY environment variable.
 	GeminiAPIKey string
 }
@@ -23,6 +21,14 @@ type ProviderConfig struct {
 // For Anthropic, OAuth credentials are preferred when AnthropicOAuthPath is
 // set and the file can be read; the SDK falls back to the ANTHROPIC_API_KEY
 // environment variable otherwise.
+//
+// For "codex" and "openai", the Codex CLI subprocess is used. The CLI binary
+// path is read from CODEX_CLI_PATH (default: "codex"). This approach is
+// required because Codex authenticates via ChatGPT OAuth, which is
+// incompatible with the OpenAI REST API SDK.
+//
+// For "gemini", the Google GenAI SDK is used with GeminiAPIKey or the
+// GEMINI_API_KEY environment variable.
 func NewProvider(name string, cfg ProviderConfig) (Provider, error) {
 	switch name {
 	case "claude", "anthropic", "":
@@ -36,7 +42,7 @@ func NewProvider(name string, cfg ProviderConfig) (Provider, error) {
 		return NewAnthropicProvider(), nil
 
 	case "codex", "openai":
-		return NewOpenAIProvider(), nil
+		return NewCodexProvider(), nil
 
 	case "gemini":
 		return NewGeminiProvider(cfg.GeminiAPIKey), nil

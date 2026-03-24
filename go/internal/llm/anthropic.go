@@ -16,6 +16,29 @@ var modelAliases = map[string]string{
 	"haiku":  "claude-haiku-4-5-20251001",
 }
 
+// modelMaxTokens maps resolved model IDs to their maximum output token limits.
+// Values are sourced from the Anthropic documentation. When a model is not
+// present, defaultMaxTokens is used as a safe conservative fallback.
+var modelMaxTokens = map[string]int64{
+	"claude-opus-4-20250514":      8192,
+	"claude-sonnet-4-20250514":    8192,
+	"claude-haiku-4-5-20251001":   4096, // haiku max is 4 096
+	"claude-3-5-haiku-20241022":   4096,
+	"claude-3-5-sonnet-20241022":  8192,
+	"claude-3-opus-20240229":      4096,
+}
+
+// defaultMaxTokens is used when a model is not found in modelMaxTokens.
+const defaultMaxTokens int64 = 4096
+
+// maxTokensForModel returns the safe maximum output token count for modelID.
+func maxTokensForModel(modelID string) int64 {
+	if n, ok := modelMaxTokens[modelID]; ok {
+		return n
+	}
+	return defaultMaxTokens
+}
+
 // resolveModel returns the full Anthropic model ID for a given alias or passthrough.
 func resolveModel(alias string) string {
 	if full, ok := modelAliases[alias]; ok {
@@ -79,10 +102,11 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 	}
 
 	modelID := resolveModel(req.Model)
+	maxTok := maxTokensForModel(modelID)
 
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(modelID),
-		MaxTokens: 8192,
+		MaxTokens: maxTok,
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(req.UserMessage)),
 		},
@@ -93,8 +117,21 @@ func (p *AnthropicProvider) Complete(ctx context.Context, req *Request) (*Respon
 		}
 	}
 
+	slog.Debug("anthropic request",
+		"model", modelID,
+		"max_tokens", maxTok,
+		"system_len", len(req.SystemPrompt),
+		"user_len", len(req.UserMessage),
+	)
+
 	msg, err := p.client.Messages.New(ctx, params)
 	if err != nil {
+		slog.Error("anthropic api error",
+			"model", modelID,
+			"max_tokens", maxTok,
+			"system_empty", req.SystemPrompt == "",
+			"error", err,
+		)
 		return nil, fmt.Errorf("anthropic messages.new: %w", err)
 	}
 
