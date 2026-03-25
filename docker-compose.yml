@@ -49,6 +49,8 @@ services:
   airflow:
     image: ghcr.io/baekenough/customclaw-airflow:latest
     restart: unless-stopped
+    group_add:
+      - "988"   # docker group GID for docker.sock access
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
       - "com.centurylinklabs.watchtower.scope=customclaw"
