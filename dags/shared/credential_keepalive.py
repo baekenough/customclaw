@@ -1,12 +1,18 @@
 """Credential Keepalive DAG.
 
 Periodically refreshes LLM CLI OAuth tokens to prevent expiry-driven outages.
-Claude OAuth tokens expire after ~8 hours; this DAG runs every 4 hours to keep
+Claude OAuth tokens expire after ~8 hours; this DAG runs every hour to keep
 them fresh and restarts the go-worker if it was previously stuck in an error
 state due to a stale token.
 
+Codex CLI uses ChatGPT OAuth which cannot be auto-refreshed.  When a 401 /
+auth failure is detected the DAG initiates a device-auth flow inside the
+go-worker container, captures the device code + URL, and sends them to Slack
+so the operator can authenticate from any device within 5 minutes.
+
 Graph:
     check_status ─► refresh_claude ─► verify_and_alert
+    check_codex  ─► recover_codex
 """
 
 from __future__ import annotations
@@ -15,6 +21,7 @@ import json
 import logging
 import os
 import subprocess
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -52,6 +59,9 @@ DEFAULT_ALERT_CHANNEL = "C0AMBNY135Z"
 DOCKER_RUN_TIMEOUT = 120
 DOCKER_RESTART_TIMEOUT = 30
 
+# Timeout for the user to complete Codex device-auth (seconds).
+CODEX_DEVICE_AUTH_TIMEOUT = 300  # 5 minutes
+
 # ---------------------------------------------------------------------------
 # DAG definition
 # ---------------------------------------------------------------------------
@@ -65,10 +75,10 @@ default_args = {
 @dag(
     dag_id="credential_keepalive",
     description=(
-        "Proactively refreshes LLM CLI OAuth tokens every 4 hours and "
+        "Proactively refreshes LLM CLI OAuth tokens every hour and "
         "restarts the go-worker if it was stuck in a credential-error state."
     ),
-    schedule="0 */4 * * *",
+    schedule="0 * * * *",
     start_date=datetime(2026, 3, 25),
     catchup=False,
     tags=["project:customclaw", "credential-management", "automated"],
@@ -315,11 +325,213 @@ def credential_keepalive() -> None:
         )
 
     # ------------------------------------------------------------------
+    # Task 4: Check Codex CLI authentication
+    # ------------------------------------------------------------------
+
+    @task()
+    def check_codex() -> dict:
+        """Test Codex CLI authentication by making a minimal API call.
+
+        Runs a trivial ``codex exec`` inside the go-worker container.  A 401 /
+        Unauthorized response or non-zero exit code indicates that the ChatGPT
+        OAuth token has expired.
+
+        Returns:
+            Dict with keys:
+            - ``healthy`` (bool): Whether the auth check passed.
+            - ``error`` (str): Short error description when unhealthy.
+        """
+        cmd = [
+            "docker", "exec",
+            "-e", "HOME=/home/appuser",
+            "-e", "NO_COLOR=1",
+            GO_WORKER_CONTAINER,
+            "codex", "exec", "hi",
+            "-m", "gpt-5.4",
+            "--dangerously-bypass-approvals-and-sandbox",
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60,
+                stdin=subprocess.DEVNULL,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning("Codex auth check timed out.")
+            return {"healthy": False, "error": "timeout"}
+        except FileNotFoundError:
+            return {"healthy": False, "error": "docker not found"}
+
+        combined = result.stdout + result.stderr
+        if result.returncode != 0 or "401" in combined or "Unauthorized" in combined:
+            error_msg = result.stderr.strip()[:300] or result.stdout.strip()[:300]
+            log.error("Codex auth check failed: %s", error_msg)
+            return {"healthy": False, "error": error_msg}
+
+        log.info("Codex auth check passed.")
+        log.info("Codex token warmup successful — access token refreshed.")
+        return {"healthy": True}
+
+    # ------------------------------------------------------------------
+    # Task 5: Recover Codex auth via device-auth flow
+    # ------------------------------------------------------------------
+
+    @task()
+    def recover_codex(codex_result: dict) -> None:
+        """If Codex auth failed, initiate device-auth flow and send code to Slack.
+
+        Starts ``codex login --device-auth`` inside the go-worker container,
+        reads the device code + URL from its output, and posts them to Slack so
+        the operator can authenticate within the 5-minute window.  Waits for the
+        process to complete before returning.
+
+        Args:
+            codex_result: Dict from ``check_codex`` with keys ``healthy`` and
+                ``error``.
+        """
+        if codex_result.get("healthy", True):
+            log.info("Codex auth is healthy — no recovery needed.")
+            return
+
+        log.info("Codex auth failed — initiating device-auth recovery flow.")
+
+        slack_token = _resolve_slack_token()
+        try:
+            channel = Variable.get(SLACK_ALERT_CHANNEL_VAR, default=DEFAULT_ALERT_CHANNEL)
+        except Exception:
+            channel = DEFAULT_ALERT_CHANNEL
+
+        # Start codex login --device-auth in the go-worker container.
+        cmd = [
+            "docker", "exec",
+            "-e", "HOME=/home/appuser",
+            GO_WORKER_CONTAINER,
+            "codex", "login", "--device-auth",
+        ]
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                stdin=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            log.error("docker binary not found — cannot initiate device-auth.")
+            raise AirflowFailException("docker not found for Codex device-auth")
+
+        # Read output lines to find device code and URL.
+        # Typical output: "Go to https://login.live.com/... and enter code XXXX-XXXX"
+        device_info_lines: list[str] = []
+        start_time = time.time()
+        full_output: list[str] = []
+
+        while time.time() - start_time < CODEX_DEVICE_AUTH_TIMEOUT:
+            if proc.poll() is not None:
+                # Process finished — drain remaining output.
+                remaining = proc.stdout.read()
+                if remaining:
+                    full_output.append(remaining)
+                break
+
+            try:
+                line = proc.stdout.readline()
+                if line:
+                    full_output.append(line)
+                    line_stripped = line.strip()
+                    log.info("codex login output: %s", line_stripped)
+                    # Capture lines that carry the URL or device code.
+                    if any(
+                        kw in line_stripped.lower()
+                        for kw in ["http", "code", "enter", "visit", "go to", "url"]
+                    ):
+                        device_info_lines.append(line_stripped)
+            except Exception:
+                time.sleep(1)
+                continue
+
+        output_text = "".join(full_output).strip()
+
+        if proc.poll() is None:
+            # Still running after timeout — kill it.
+            proc.kill()
+            proc.wait()
+            log.error(
+                "Codex device-auth timed out after %ds.", CODEX_DEVICE_AUTH_TIMEOUT
+            )
+
+            # Still send whatever device info we captured so the operator can
+            # complete auth manually.
+            if device_info_lines and slack_token:
+                device_msg = "\n".join(device_info_lines)
+                text = (
+                    ":key: *Codex Device Auth Required*\n"
+                    "돌쇠(Discord) 봇의 OpenAI 인증이 만료되었습니다.\n"
+                    "아래 URL에서 코드를 입력해주세요:\n"
+                    f"```{device_msg}```\n"
+                    f"_(인증 대기 {CODEX_DEVICE_AUTH_TIMEOUT}초 초과 — 수동으로 완료 필요)_\n"
+                    "```ssh ubuntu24_home_server-ext\n"
+                    "docker exec -it -e HOME=/home/appuser customclaw-go-worker-1 "
+                    "codex login --device-auth```"
+                )
+                _send_slack_alert(token=slack_token, channel=channel, output=text)
+            raise AirflowFailException(
+                f"Codex device-auth timed out. "
+                f"Device info: {' | '.join(device_info_lines)}"
+            )
+
+        # Process completed within the timeout window.
+        if proc.returncode == 0:
+            log.info("Codex device-auth completed successfully!")
+            if slack_token:
+                _send_slack_alert(
+                    token=slack_token,
+                    channel=channel,
+                    output=(
+                        ":white_check_mark: *Codex 인증 복구 완료*\n"
+                        "돌쇠 봇이 정상 동작합니다."
+                    ),
+                )
+        else:
+            log.error(
+                "Codex device-auth failed (exit %d): %s",
+                proc.returncode,
+                output_text[:300],
+            )
+            if slack_token and device_info_lines:
+                device_msg = "\n".join(device_info_lines)
+                text = (
+                    ":rotating_light: *Codex OAuth 인증 만료*\n"
+                    "돌쇠(Discord) 봇이 응답하지 않습니다.\n"
+                    "아래 URL에서 인증해주세요:\n"
+                    f"```{device_msg}```"
+                )
+                _send_slack_alert(token=slack_token, channel=channel, output=text)
+            elif slack_token:
+                _send_slack_alert(
+                    token=slack_token,
+                    channel=channel,
+                    output=(
+                        ":rotating_light: *Codex OAuth 인증 만료*\n"
+                        "돌쇠 봇이 응답하지 않습니다. 수동 로그인 필요:\n"
+                        "```ssh ubuntu24_home_server-ext\n"
+                        "docker exec -it -e HOME=/home/appuser "
+                        "customclaw-go-worker-1 codex login --device-auth```"
+                    ),
+                )
+            raise AirflowFailException(
+                f"Codex device-auth failed: {output_text[:200]}"
+            )
+
+    # ------------------------------------------------------------------
     # Wire up the task graph
     # ------------------------------------------------------------------
     statuses = check_status()
     refresh_result = refresh_claude(statuses)
     verify_and_alert(refresh_result)
+
+    codex_result = check_codex()
+    recover_codex(codex_result)
 
 
 # ---------------------------------------------------------------------------

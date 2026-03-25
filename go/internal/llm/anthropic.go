@@ -69,7 +69,7 @@ func (p *ClaudeProvider) Complete(ctx context.Context, req *Request) (*Response,
 	model := resolveClaudeModel(req.Model)
 	maxTurns := req.MaxTurns
 	if maxTurns == 0 {
-		maxTurns = 3
+		maxTurns = 5
 	}
 
 	// Build combined prompt: the Claude CLI takes a single -p argument.

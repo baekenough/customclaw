@@ -155,7 +155,9 @@ function SummaryStatsBar({ dags }: { dags: Dag[] }) {
   const total = dags.length;
   const active = dags.filter((d) => !d.is_paused).length;
   const running = dags.filter((d) => d.last_run_state === "running").length;
-  const failed = dags.filter((d) => d.last_run_state === "failed").length;
+  const failed = dags.filter(
+    (d) => d.last_run_state === "failed" || d.last_run_state === "upstream_failed"
+  ).length;
 
   const stats = [
     {
