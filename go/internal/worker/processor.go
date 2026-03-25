@@ -141,19 +141,25 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 		githubToken = os.Getenv(cfg.Project.GithubTokenVar)
 	}
 
-	// Save user message before processing.
 	hKey := historyKey(msg)
+
+	// Load conversation history before appending the new message so that DB
+	// fallback triggers correctly on process restart (in-memory is empty).
+	history, err := p.store.GetHistory(ctx, hKey, cfg.Memory.ContextWindow, msg.BotID, msg.ChannelID, msg.ThreadID)
+	if err != nil {
+		slog.Warn("failed to load history", "key", hKey, "error", err)
+	}
+
+	// Append user message to in-memory cache and persist to DB.
 	if err := p.store.Append(ctx, hKey, memory.Message{
 		Role:    "user",
 		Content: msg.Text,
 	}); err != nil {
 		slog.Warn("failed to save user message", "key", hKey, "error", err)
 	}
-
-	// Load conversation history.
-	history, err := p.store.GetHistory(ctx, hKey, cfg.Memory.ContextWindow)
-	if err != nil {
-		slog.Warn("failed to load history", "key", hKey, "error", err)
+	// Persist to DB (non-blocking - log warning on failure).
+	if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, msg.UserID, "user", msg.Text); err != nil {
+		slog.Warn("failed to save user message to DB", "error", err)
 	}
 
 	// Load relevant memories concurrently (best-effort, non-blocking).
@@ -246,6 +252,10 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 		Content: responseText,
 	}); err != nil {
 		slog.Warn("failed to save assistant message", "key", hKey, "error", err)
+	}
+	// Persist to DB (non-blocking - log warning on failure).
+	if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, "", "assistant", responseText); err != nil {
+		slog.Warn("failed to save assistant message to DB", "error", err)
 	}
 
 	// Trigger memory extraction if configured (background, non-blocking).

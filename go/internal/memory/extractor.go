@@ -100,7 +100,8 @@ func NewMemoryExtractor(
 func (e *MemoryExtractor) ExtractAndStore(ctx context.Context, botID, channelID string) error {
 	hKey := "channel:" + channelID
 
-	history, err := e.store.GetHistory(ctx, hKey, maxMessages)
+	// Pass botID and channelID for DB fallback; threadTS is empty for channel-level extraction.
+	history, err := e.store.GetHistory(ctx, hKey, maxMessages, botID, channelID, "")
 	if err != nil {
 		slog.Warn("extractor: failed to load history",
 			"bot", botID,

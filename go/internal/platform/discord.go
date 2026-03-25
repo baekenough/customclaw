@@ -175,9 +175,11 @@ func (a *DiscordAdapter) onMessageCreate(s *discordgo.Session, m *discordgo.Mess
 	text := strings.ReplaceAll(m.Content, "<@"+s.State.User.ID+">", "")
 	text = strings.TrimSpace(text)
 
-	// thread_ts: use the referenced message ID if this is a reply, otherwise
-	// the message's own ID acts as the thread root.
-	threadTS := m.ID
+	// thread_ts: use the referenced message ID if this is a reply.
+	// Non-reply messages use an empty thread_ts so the worker groups them
+	// under historyKey = "channel:{channelID}", matching Slack non-threaded
+	// behaviour and allowing users in the same channel to share context.
+	threadTS := ""
 	if m.MessageReference != nil && m.MessageReference.MessageID != "" {
 		threadTS = m.MessageReference.MessageID
 	}
