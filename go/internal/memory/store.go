@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/singleflight"
 )
 
 // _koreanParticles lists Korean particles to strip during tokenisation.
@@ -67,6 +68,10 @@ type MessageStore struct {
 	mu         sync.Mutex
 	history    map[string][]Message
 	historyOrd []string // insertion-order key tracking for eviction
+
+	// sf coalesces concurrent DB fallback queries for the same history key,
+	// preventing duplicate DB round-trips on process restart.
+	sf singleflight.Group
 
 	// preference TTL cache
 	prefMu    sync.RWMutex
@@ -128,7 +133,6 @@ func (s *MessageStore) SaveMessage(
 		INSERT INTO messages (bot_id, channel_id, thread_ts, user_id, role, content)
 		VALUES ($1, $2, $3, $4, $5, $6)`
 	if _, err := s.pool.Exec(ctx, q, botID, channelID, threadTS, userID, role, content); err != nil {
-		slog.Warn("SaveMessage failed", "error", err)
 		return err
 	}
 	return nil
@@ -241,21 +245,29 @@ func (s *MessageStore) GetHistory(ctx context.Context, key string, limit int, bo
 	s.mu.Unlock()
 
 	// In-memory is empty. Try DB fallback when pool is available.
+	// singleflight coalesces concurrent callers with the same key so that
+	// only one DB round-trip is issued on process restart.
 	if s.pool != nil && botID != "" && channelID != "" {
-		var (
-			dbMsgs []Message
-			dbErr  error
-		)
-		if threadTS != "" {
-			dbMsgs, dbErr = s.GetThreadMessages(ctx, botID, channelID, threadTS, limit)
-		} else {
-			dbMsgs, dbErr = s.GetChannelMessages(ctx, botID, channelID, limit, "")
+		type sfResult struct {
+			msgs []Message
+			err  error
 		}
-		if dbErr != nil {
-			slog.Warn("GetHistory DB fallback failed", "key", key, "error", dbErr)
-			return nil, dbErr
+		val, _, _ := s.sf.Do(key, func() (interface{}, error) {
+			var dbMsgs []Message
+			var dbErr error
+			if threadTS != "" {
+				dbMsgs, dbErr = s.GetThreadMessages(ctx, botID, channelID, threadTS, limit)
+			} else {
+				dbMsgs, dbErr = s.GetChannelMessages(ctx, botID, channelID, limit, "")
+			}
+			return &sfResult{dbMsgs, dbErr}, nil
+		})
+		res := val.(*sfResult)
+		if res.err != nil {
+			slog.Warn("GetHistory DB fallback failed", "key", key, "error", res.err)
+			return nil, res.err
 		}
-		if len(dbMsgs) > 0 {
+		if len(res.msgs) > 0 {
 			s.mu.Lock()
 			// Re-check: another goroutine may have populated via Append while
 			// the DB query was in flight.
@@ -273,8 +285,8 @@ func (s *MessageStore) GetHistory(ctx context.Context, key string, limit int, bo
 					delete(s.history, oldest)
 				}
 			}
-			s.history[key] = dbMsgs
-			result := s.sliceHistory(dbMsgs, limit)
+			s.history[key] = res.msgs
+			result := s.sliceHistory(res.msgs, limit)
 			s.mu.Unlock()
 			return result, nil
 		}
@@ -416,10 +428,10 @@ func (s *MessageStore) SearchMemories(
 	}), nil
 }
 
-// SearchRecentMessages scores recent channel messages against queryText.
+// SearchRecentMessages scores recent messages in a specific channel against queryText.
 func (s *MessageStore) SearchRecentMessages(
 	ctx context.Context,
-	botID, queryText string,
+	botID, channelID, queryText string,
 	limit, lookback int,
 ) ([]SearchResult, error) {
 	if s.pool == nil {
@@ -429,9 +441,10 @@ func (s *MessageStore) SearchRecentMessages(
 		SELECT content, timestamp
 		FROM messages
 		WHERE bot_id = $1
+		  AND channel_id = $2
 		ORDER BY timestamp DESC
-		LIMIT $2`
-	rows, err := s.pool.Query(ctx, q, botID, lookback)
+		LIMIT $3`
+	rows, err := s.pool.Query(ctx, q, botID, channelID, lookback)
 	if err != nil {
 		slog.Warn("SearchRecentMessages failed", "error", err)
 		return nil, err

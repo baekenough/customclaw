@@ -157,16 +157,18 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 	}); err != nil {
 		slog.Warn("failed to save user message", "key", hKey, "error", err)
 	}
-	// Persist to DB (non-blocking - log warning on failure).
-	if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, msg.UserID, "user", msg.Text); err != nil {
-		slog.Warn("failed to save user message to DB", "error", err)
-	}
+	// Persist to DB asynchronously — does not block the critical path.
+	go func() {
+		if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, msg.UserID, "user", msg.Text); err != nil {
+			slog.Warn("failed to save user message to DB", "error", err)
+		}
+	}()
 
 	// Load relevant memories concurrently (best-effort, non-blocking).
 	type memResult struct{ results []memory.SearchResult }
 	memCh := make(chan memResult, 1)
 	go func() {
-		results, err := p.search.Search(ctx, msg.BotID, msg.Text, 5)
+		results, err := p.search.Search(ctx, msg.BotID, msg.ChannelID, msg.Text, 5)
 		if err != nil {
 			slog.Warn("memory search failed", "error", err)
 		}
@@ -253,10 +255,12 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 	}); err != nil {
 		slog.Warn("failed to save assistant message", "key", hKey, "error", err)
 	}
-	// Persist to DB (non-blocking - log warning on failure).
-	if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, "", "assistant", responseText); err != nil {
-		slog.Warn("failed to save assistant message to DB", "error", err)
-	}
+	// Persist to DB asynchronously — does not block the critical path.
+	go func() {
+		if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, "", "assistant", responseText); err != nil {
+			slog.Warn("failed to save assistant message to DB", "error", err)
+		}
+	}()
 
 	// Trigger memory extraction if configured (background, non-blocking).
 	if cfg.Memory.AutoExtract && p.extractor != nil {

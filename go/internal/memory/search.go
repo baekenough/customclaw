@@ -169,7 +169,7 @@ const recentMessagesLookback = 200
 //  3. Fallback → PostgreSQL keyword search.
 //  4. Still short → recent message search to cover extraction lag.
 //  5. Sort by score descending, return top topK.
-func (h *HybridSearch) Search(ctx context.Context, botID, queryText string, topK int) ([]SearchResult, error) {
+func (h *HybridSearch) Search(ctx context.Context, botID, channelID, queryText string, topK int) ([]SearchResult, error) {
 	var results []SearchResult
 	seen := make(map[[2]string]bool) // dedup by [category, content]
 
@@ -199,7 +199,7 @@ func (h *HybridSearch) Search(ctx context.Context, botID, queryText string, topK
 		if recentLimit < 1 {
 			recentLimit = 1
 		}
-		if items, err := h.store.SearchRecentMessages(ctx, botID, queryText, recentLimit, recentMessagesLookback); err == nil {
+		if items, err := h.store.SearchRecentMessages(ctx, botID, channelID, queryText, recentLimit, recentMessagesLookback); err == nil {
 			for _, item := range items {
 				if item.Category == "recent_context" {
 					item.Score += 2.0
@@ -279,7 +279,7 @@ func (h *HybridSearch) Search(ctx context.Context, botID, queryText string, topK
 			if remaining < 1 {
 				remaining = 1
 			}
-			items, err := h.store.SearchRecentMessages(ctx, botID, q, remaining, recentMessagesLookback)
+			items, err := h.store.SearchRecentMessages(ctx, botID, channelID, q, remaining, recentMessagesLookback)
 			if err != nil {
 				break
 			}
