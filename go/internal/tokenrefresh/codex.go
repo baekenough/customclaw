@@ -23,14 +23,18 @@ const (
 	codexRefreshWindow = 24 * time.Hour
 )
 
-// codexCredPath returns the path to the Codex credentials file.
-// Requires CODEX_CONFIG_DIR to be set.
+// codexCredPath returns the path to the Codex credentials file, consulting
+// env vars in priority order:
+//  1. CODEX_CONFIG_DIR/auth.json
+//  2. CONTAINER_HOME/.codex/auth.json
 func codexCredPath() (string, error) {
-	dir := os.Getenv("CODEX_CONFIG_DIR")
-	if dir == "" {
-		return "", fmt.Errorf("CODEX_CONFIG_DIR is not set")
+	if dir := os.Getenv("CODEX_CONFIG_DIR"); dir != "" {
+		return filepath.Join(dir, "auth.json"), nil
 	}
-	return filepath.Join(dir, "auth.json"), nil
+	if home := os.Getenv("CONTAINER_HOME"); home != "" {
+		return filepath.Join(home, ".codex", "auth.json"), nil
+	}
+	return "", fmt.Errorf("none of CODEX_CONFIG_DIR or CONTAINER_HOME is set")
 }
 
 // jwtExpiry decodes the payload of a JWT (without signature verification) and
