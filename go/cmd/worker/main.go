@@ -18,6 +18,7 @@ import (
 	"github.com/baekenough/customclaw/internal/memory"
 	"github.com/baekenough/customclaw/internal/platform"
 	rediswrapper "github.com/baekenough/customclaw/internal/redis"
+	"github.com/baekenough/customclaw/internal/tokenrefresh"
 	"github.com/baekenough/customclaw/internal/tools"
 	"github.com/baekenough/customclaw/internal/usage"
 	"github.com/baekenough/customclaw/internal/worker"
@@ -180,6 +181,9 @@ func run() error {
 	// Credential probe — periodically checks LLM provider credentials and
 	// stores results in the credential_status table. Fixes issue #32.
 	credprobe.Start(ctx, store.Pool())
+
+	// Token auto-refresh — proactively refreshes OAuth tokens before expiry.
+	tokenrefresh.Start(ctx)
 
 	// Analysis consumer — processes GitHub issue/PR analysis requests.
 	if err := rediswrapper.EnsureStreamGroup(ctx, rdb, analysis.AnalysisStream, analysis.AnalysisGroup); err != nil {
