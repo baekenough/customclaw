@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"golang.org/x/sync/singleflight"
 )
 
 // _koreanParticles lists Korean particles to strip during tokenisation.
@@ -67,6 +68,10 @@ type MessageStore struct {
 	mu         sync.Mutex
 	history    map[string][]Message
 	historyOrd []string // insertion-order key tracking for eviction
+
+	// sf coalesces concurrent DB fallback queries for the same history key,
+	// preventing duplicate DB round-trips on process restart.
+	sf singleflight.Group
 
 	// preference TTL cache
 	prefMu    sync.RWMutex
@@ -128,7 +133,6 @@ func (s *MessageStore) SaveMessage(
 		INSERT INTO messages (bot_id, channel_id, thread_ts, user_id, role, content)
 		VALUES ($1, $2, $3, $4, $5, $6)`
 	if _, err := s.pool.Exec(ctx, q, botID, channelID, threadTS, userID, role, content); err != nil {
-		slog.Warn("SaveMessage failed", "error", err)
 		return err
 	}
 	return nil
@@ -222,25 +226,86 @@ func (s *MessageStore) GetRecentMessages(
 
 // GetHistory returns up to limit recent messages for key.
 // The key is an opaque string from the processor (e.g. "thread:xxx" or
-// "channel:yyy"). The DB schema has no history_key column; instead we use
-// the in-memory fallback for all cases so the processor's key-based API
-// continues to work. Direct DB reads by composite key (bot_id, channel_id,
-// thread_ts) are available via GetThreadMessages / GetChannelMessages.
-func (s *MessageStore) GetHistory(ctx context.Context, key string, limit int) ([]Message, error) {
-	// Always use the in-memory store for key-based access, regardless of
-	// whether a DB pool is configured. The DB is written to via SaveMessage
-	// which accepts explicit (bot_id, channel_id, thread_ts) coordinates.
+// "channel:yyy"). When in-memory history is non-empty it is returned
+// directly. When in-memory is empty and a DB pool is available the method
+// falls back to querying the DB using (botID, channelID, threadTS) as
+// composite coordinates. Results fetched from DB are cached in the
+// in-memory store for subsequent calls in the same process lifetime.
+//
+// botID, channelID, and threadTS are only used for the DB fallback; they
+// are ignored when in-memory history is already populated.
+func (s *MessageStore) GetHistory(ctx context.Context, key string, limit int, botID, channelID, threadTS string) ([]Message, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	all := s.history[key]
+	if len(all) > 0 {
+		result := s.sliceHistory(all, limit)
+		s.mu.Unlock()
+		return result, nil
+	}
+	s.mu.Unlock()
+
+	// In-memory is empty. Try DB fallback when pool is available.
+	// singleflight coalesces concurrent callers with the same key so that
+	// only one DB round-trip is issued on process restart.
+	if s.pool != nil && botID != "" && channelID != "" {
+		type sfResult struct {
+			msgs []Message
+			err  error
+		}
+		val, _, _ := s.sf.Do(key, func() (interface{}, error) {
+			var dbMsgs []Message
+			var dbErr error
+			if threadTS != "" {
+				dbMsgs, dbErr = s.GetThreadMessages(ctx, botID, channelID, threadTS, limit)
+			} else {
+				dbMsgs, dbErr = s.GetChannelMessages(ctx, botID, channelID, limit, "")
+			}
+			return &sfResult{dbMsgs, dbErr}, nil
+		})
+		res := val.(*sfResult)
+		if res.err != nil {
+			slog.Warn("GetHistory DB fallback failed", "key", key, "error", res.err)
+			return nil, res.err
+		}
+		if len(res.msgs) > 0 {
+			s.mu.Lock()
+			// Re-check: another goroutine may have populated via Append while
+			// the DB query was in flight.
+			if existing := s.history[key]; len(existing) > 0 {
+				result := s.sliceHistory(existing, limit)
+				s.mu.Unlock()
+				return result, nil
+			}
+			// Cache DB results so subsequent calls skip the DB round-trip.
+			if _, exists := s.history[key]; !exists {
+				s.historyOrd = append(s.historyOrd, key)
+				if len(s.historyOrd) > maxInMemoryKeys {
+					oldest := s.historyOrd[0]
+					s.historyOrd = s.historyOrd[1:]
+					delete(s.history, oldest)
+				}
+			}
+			s.history[key] = res.msgs
+			result := s.sliceHistory(res.msgs, limit)
+			s.mu.Unlock()
+			return result, nil
+		}
+	}
+
+	return nil, nil
+}
+
+// sliceHistory returns a copy of the last limit messages from all.
+// Callers must hold s.mu.
+func (s *MessageStore) sliceHistory(all []Message, limit int) []Message {
 	if len(all) <= limit {
 		out := make([]Message, len(all))
 		copy(out, all)
-		return out, nil
+		return out
 	}
 	out := make([]Message, limit)
 	copy(out, all[len(all)-limit:])
-	return out, nil
+	return out
 }
 
 // Append adds a message for key to the in-memory store.
@@ -363,10 +428,10 @@ func (s *MessageStore) SearchMemories(
 	}), nil
 }
 
-// SearchRecentMessages scores recent channel messages against queryText.
+// SearchRecentMessages scores recent messages in a specific channel against queryText.
 func (s *MessageStore) SearchRecentMessages(
 	ctx context.Context,
-	botID, queryText string,
+	botID, channelID, queryText string,
 	limit, lookback int,
 ) ([]SearchResult, error) {
 	if s.pool == nil {
@@ -376,9 +441,10 @@ func (s *MessageStore) SearchRecentMessages(
 		SELECT content, timestamp
 		FROM messages
 		WHERE bot_id = $1
+		  AND channel_id = $2
 		ORDER BY timestamp DESC
-		LIMIT $2`
-	rows, err := s.pool.Query(ctx, q, botID, lookback)
+		LIMIT $3`
+	rows, err := s.pool.Query(ctx, q, botID, channelID, lookback)
 	if err != nil {
 		slog.Warn("SearchRecentMessages failed", "error", err)
 		return nil, err

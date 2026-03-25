@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 // ---------------------------------------------------------------------------
@@ -344,6 +346,61 @@ func TestDiscordPublisher_RemoveReaction_SendsDELETE(t *testing.T) {
 	}
 	if !strings.Contains(captured.URL.Path, "@me") {
 		t.Errorf("expected path to contain '@me', got %q", captured.URL.Path)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// threadTS logic tests
+// ---------------------------------------------------------------------------
+
+// threadTSFromMessage extracts the thread_ts value that onMessageCreate would
+// produce for the given message, using the same logic as the handler.
+func threadTSFromMessage(m *discordgo.Message) string {
+	if m.MessageReference != nil && m.MessageReference.MessageID != "" {
+		return m.MessageReference.MessageID
+	}
+	return ""
+}
+
+func TestThreadTS_NonReplyIsEmpty(t *testing.T) {
+	// A regular channel message (no MessageReference) must produce an empty
+	// thread_ts so the worker uses historyKey = "channel:{channelID}".
+	m := &discordgo.Message{
+		ID:               "msg-001",
+		MessageReference: nil,
+	}
+	got := threadTSFromMessage(m)
+	if got != "" {
+		t.Errorf("non-reply message: expected empty threadTS, got %q", got)
+	}
+}
+
+func TestThreadTS_ReplyUsesReferencedMessageID(t *testing.T) {
+	// A reply message must produce thread_ts equal to the referenced message ID.
+	const referencedID = "msg-parent-999"
+	m := &discordgo.Message{
+		ID: "msg-reply-001",
+		MessageReference: &discordgo.MessageReference{
+			MessageID: referencedID,
+		},
+	}
+	got := threadTSFromMessage(m)
+	if got != referencedID {
+		t.Errorf("reply message: expected threadTS %q, got %q", referencedID, got)
+	}
+}
+
+func TestThreadTS_EmptyReferenceIDTreatedAsNonReply(t *testing.T) {
+	// MessageReference present but MessageID empty → treated as non-reply.
+	m := &discordgo.Message{
+		ID: "msg-002",
+		MessageReference: &discordgo.MessageReference{
+			MessageID: "",
+		},
+	}
+	got := threadTSFromMessage(m)
+	if got != "" {
+		t.Errorf("empty reference ID: expected empty threadTS, got %q", got)
 	}
 }
 

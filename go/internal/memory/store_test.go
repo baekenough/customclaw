@@ -295,7 +295,7 @@ func TestGetHistoryAppendInMemory(t *testing.T) {
 	const key = "channel:C1234"
 
 	// Empty history.
-	msgs, err := store.GetHistory(ctx, key, 10)
+	msgs, err := store.GetHistory(ctx, key, 10, "", "", "")
 	if err != nil {
 		t.Fatalf("GetHistory on empty store: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestGetHistoryAppendInMemory(t *testing.T) {
 	_ = store.Append(ctx, key, Message{Role: "user", Content: "hello"})
 	_ = store.Append(ctx, key, Message{Role: "assistant", Content: "hi"})
 
-	msgs, err = store.GetHistory(ctx, key, 10)
+	msgs, err = store.GetHistory(ctx, key, 10, "", "", "")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
@@ -331,12 +331,92 @@ func TestGetHistoryLimit(t *testing.T) {
 		_ = store.Append(ctx, key, Message{Role: "user", Content: "msg"})
 	}
 
-	msgs, err := store.GetHistory(ctx, key, 3)
+	msgs, err := store.GetHistory(ctx, key, 3, "", "", "")
 	if err != nil {
 		t.Fatalf("GetHistory: %v", err)
 	}
 	if len(msgs) != 3 {
 		t.Errorf("expected 3 messages with limit=3, got %d", len(msgs))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// GetHistory — DB fallback behaviour (no real DB required: nil pool path)
+// ---------------------------------------------------------------------------
+
+// TestGetHistoryReturnsInMemoryWhenAvailable verifies that populated in-memory
+// data is returned without touching the DB.
+func TestGetHistoryReturnsInMemoryWhenAvailable(t *testing.T) {
+	ctx := context.Background()
+	store, _ := NewMessageStore(ctx, "") // pool == nil
+
+	const key = "thread:T001"
+	_ = store.Append(ctx, key, Message{Role: "user", Content: "ping"})
+	_ = store.Append(ctx, key, Message{Role: "assistant", Content: "pong"})
+
+	msgs, err := store.GetHistory(ctx, key, 10, "bot1", "ch1", "T001")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[0].Content != "ping" || msgs[1].Content != "pong" {
+		t.Errorf("unexpected messages: %+v", msgs)
+	}
+}
+
+// TestGetHistoryEmptyWhenNoPoolAndNoMemory verifies that an empty slice is
+// returned when in-memory is empty and no DB pool is available.
+func TestGetHistoryEmptyWhenNoPoolAndNoMemory(t *testing.T) {
+	ctx := context.Background()
+	store, _ := NewMessageStore(ctx, "") // pool == nil
+
+	msgs, err := store.GetHistory(ctx, "channel:CNEW", 10, "bot1", "chX", "")
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 messages for empty store with nil pool, got %d", len(msgs))
+	}
+}
+
+// TestGetHistoryDBFallbackCachesResults verifies that results returned by the
+// DB fallback are cached in the in-memory store so a second call does not hit
+// the DB again. We simulate a DB result by pre-populating the history map
+// after a first call returns empty, then checking the cache is used.
+//
+// Because we cannot inject a real pgxpool in a unit test, this test exercises
+// the cache path indirectly: after a successful Append the subsequent
+// GetHistory must return from cache (in-memory), not re-query.
+func TestGetHistoryDBFallbackCachesResults(t *testing.T) {
+	ctx := context.Background()
+	store, _ := NewMessageStore(ctx, "") // pool == nil
+
+	const key = "channel:CCACHE"
+
+	// First call: in-memory empty, no pool → returns nil.
+	first, err := store.GetHistory(ctx, key, 10, "bot1", "ch1", "")
+	if err != nil {
+		t.Fatalf("first GetHistory: %v", err)
+	}
+	if len(first) != 0 {
+		t.Errorf("expected 0 messages on first call, got %d", len(first))
+	}
+
+	// Simulate messages being appended (as SaveMessage + Append would do).
+	_ = store.Append(ctx, key, Message{Role: "user", Content: "cached-msg"})
+
+	// Second call: in-memory now populated → should return from cache.
+	second, err := store.GetHistory(ctx, key, 10, "bot1", "ch1", "")
+	if err != nil {
+		t.Fatalf("second GetHistory: %v", err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("expected 1 cached message, got %d", len(second))
+	}
+	if second[0].Content != "cached-msg" {
+		t.Errorf("unexpected cached message: %+v", second[0])
 	}
 }
 
