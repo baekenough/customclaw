@@ -43,6 +43,13 @@ interface BotData {
 }
 
 function getChannelCount(bot: BotData): number {
+  // Discord bots: check discord-specific config for guild/channel info
+  if (bot.platform === "discord") {
+    const discord = (bot as unknown as Record<string, unknown>).discord as Record<string, unknown> | undefined;
+    if (discord?.guild_id) return 1; // Connected to 1 guild
+    return 0;
+  }
+  // Slack bots: existing logic
   if (bot.channels?.length > 0) return bot.channels.length;
   if ((bot.security?.allowed_channels?.length ?? 0) > 0)
     return bot.security!.allowed_channels!.length;

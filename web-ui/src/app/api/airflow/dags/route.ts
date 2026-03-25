@@ -26,7 +26,10 @@ export async function GET() {
           const runRes = await airflowFetch(
             `/dags/${dag.dag_id}/dagRuns?limit=1&order_by=-start_date`
           );
-          if (!runRes.ok) return { ...dag, last_run: null, last_run_state: null };
+          if (!runRes.ok) {
+            console.warn(`dagRuns API error for ${dag.dag_id}: ${runRes.status}`);
+            return { ...dag, last_run: null, last_run_state: null };
+          }
           const runData = await runRes.json();
           const lastRun = runData.dag_runs?.[0];
           return {
@@ -34,7 +37,8 @@ export async function GET() {
             last_run: lastRun?.start_date ?? null,
             last_run_state: lastRun?.state ?? null,
           };
-        } catch {
+        } catch (err) {
+          console.error(`dagRuns fetch failed for ${dag.dag_id}:`, err);
           return { ...dag, last_run: null, last_run_state: null };
         }
       })
