@@ -88,12 +88,20 @@ func (p *ClaudeProvider) Complete(ctx context.Context, req *Request) (*Response,
 		"max_tokens", maxTokens,
 	)
 
-	msg, err := p.client.Messages.New(ctx, params)
-	if err != nil {
+	stream := p.client.Messages.NewStreaming(ctx, params)
+	defer stream.Close()
+
+	var msg anthropic.Message
+	for stream.Next() {
+		if err := msg.Accumulate(stream.Current()); err != nil {
+			return nil, fmt.Errorf("anthropic stream accumulate error: %w", err)
+		}
+	}
+	if err := stream.Err(); err != nil {
 		return nil, fmt.Errorf("anthropic api error: %w", err)
 	}
 
-	text := extractClaudeText(msg)
+	text := extractClaudeText(&msg)
 	if text == "" {
 		return nil, fmt.Errorf("anthropic api returned no text content")
 	}
