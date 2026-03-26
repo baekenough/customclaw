@@ -19,7 +19,6 @@ jobs:
   trigger-analysis:
     runs-on: ubuntu-latest
     strategy:
-      max-parallel: 1
       matrix:
         issue_number: ${{ fromJSON(format('[{0}]', github.event.inputs.issue_numbers || github.event.issue.number)) }}
     steps:
