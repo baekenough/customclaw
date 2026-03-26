@@ -3,18 +3,32 @@ name: Trigger Issue Analysis
 on:
   issues:
     types: [opened]
+  workflow_dispatch:
+    inputs:
+      issue_numbers:
+        description: 'Comma-separated issue numbers to analyze (e.g., 676,681,682)'
+        required: true
+        type: string
+      repo:
+        description: 'Repository (owner/repo)'
+        required: false
+        default: 'baekenough/customclaw'
+        type: string
 
 jobs:
   trigger-analysis:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        issue_number: ${{ fromJSON(format('[{0}]', github.event.inputs.issue_numbers || github.event.issue.number)) }}
     steps:
       - name: Trigger Airflow DAG
         env:
           AIRFLOW_API_URL: ${{ secrets.AIRFLOW_API_URL }}
           AIRFLOW_API_USER: ${{ secrets.AIRFLOW_API_USER }}
           AIRFLOW_API_PASSWORD: ${{ secrets.AIRFLOW_API_PASSWORD }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
-          REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ matrix.issue_number }}
+          REPO: ${{ github.event.inputs.repo || github.repository }}
         run: |
           set -euo pipefail
 
@@ -40,10 +54,10 @@ jobs:
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "{
-              \"dag_run_id\": \"opened_${ISSUE_NUMBER}_$(date +%s)\",
+              \"dag_run_id\": \"manual_${ISSUE_NUMBER}_$(date +%s)\",
               \"logical_date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
               \"conf\": {\"issue_number\": ${ISSUE_NUMBER}, \"repo\": \"${REPO}\"},
-              \"note\": \"Triggered by issue #${ISSUE_NUMBER} opened event\"
+              \"note\": \"Manual trigger for issue #${ISSUE_NUMBER}\"
             }")
           HTTP_CODE=$(echo "${RESPONSE}" | tail -n1)
           BODY=$(echo "${RESPONSE}" | head -n-1)
