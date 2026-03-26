@@ -11,8 +11,8 @@ import (
 // claudeModelAliases maps short friendly names to Anthropic Messages API model IDs.
 // Unknown aliases are passed through unchanged.
 var claudeModelAliases = map[string]string{
-	"opus":   "claude-opus-4-6-20260311",
-	"sonnet": "claude-sonnet-4-6-20260311",
+	"opus":   "claude-opus-4-6",
+	"sonnet": "claude-sonnet-4-6",
 	"haiku":  "claude-haiku-4-5-20251001",
 }
 

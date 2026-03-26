@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 
 	openai "github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -44,7 +45,8 @@ type OpenAIProvider struct {
 // NewOpenAIProvider constructs an OpenAIProvider. The SDK reads OPENAI_API_KEY
 // from the environment automatically.
 func NewOpenAIProvider() *OpenAIProvider {
-	client := openai.NewClient(option.WithAPIKey(""))
+	apiKey := os.Getenv("OPENAI_API_KEY")
+	client := openai.NewClient(option.WithAPIKey(apiKey))
 	return &OpenAIProvider{client: &client}
 }
 

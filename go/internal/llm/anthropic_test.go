@@ -15,13 +15,13 @@ func TestResolveClaudeModel(t *testing.T) {
 		alias string
 		want  string
 	}{
-		{"opus", "claude-opus-4-6-20260311"},
-		{"sonnet", "claude-sonnet-4-6-20260311"},
+		{"opus", "claude-opus-4-6"},
+		{"sonnet", "claude-sonnet-4-6"},
 		{"haiku", "claude-haiku-4-5-20251001"},
 		// Unknown aliases pass through unchanged.
 		{"claude-3-5-sonnet-20241022", "claude-3-5-sonnet-20241022"},
 		// Empty alias falls back to the default model (sonnet).
-		{"", "claude-sonnet-4-6-20260311"},
+		{"", "claude-sonnet-4-6"},
 	}
 
 	for _, tc := range tests {
