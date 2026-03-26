@@ -21,6 +21,13 @@ func makeJWT(exp int64) string {
 	return header + "." + payload + ".sig"
 }
 
+func makeJWTPadded(exp int64) string {
+	header := base64.URLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	claims, _ := json.Marshal(map[string]int64{"exp": exp})
+	payload := base64.URLEncoding.EncodeToString(claims)
+	return header + "." + payload + ".sig"
+}
+
 func TestJWTExpiry_Valid(t *testing.T) {
 	want := int64(9999999999)
 	token := makeJWT(want)
@@ -47,6 +54,18 @@ func TestJWTExpiry_MissingExp(t *testing.T) {
 	_, err := jwtExpiry(token)
 	if err == nil {
 		t.Error("expected error when exp claim is absent")
+	}
+}
+
+func TestJWTExpiry_PaddedBase64(t *testing.T) {
+	want := int64(2233445566)
+	token := makeJWTPadded(want)
+	got, err := jwtExpiry(token)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("got exp %d, want %d", got, want)
 	}
 }
 
@@ -144,6 +163,34 @@ func TestCodexNeedsRefresh_MalformedToken(t *testing.T) {
 	// Malformed token should be treated as needing refresh.
 	if !codexNeedsRefresh(creds) {
 		t.Error("expected needs refresh for malformed token")
+	}
+}
+
+func TestCodexNeedsRefresh_IDTokenExpired(t *testing.T) {
+	accessExp := time.Now().Add(48 * time.Hour).Unix()
+	idExp := time.Now().Add(-5 * time.Minute).Unix()
+	creds := &codexCredentials{
+		Tokens: codexTokens{
+			AccessToken: makeJWT(accessExp),
+			IDToken:     makeJWT(idExp),
+		},
+	}
+	if !codexNeedsRefresh(creds) {
+		t.Error("expected needs refresh when id token is already expired")
+	}
+}
+
+func TestCodexNeedsRefresh_IDTokenValid(t *testing.T) {
+	accessExp := time.Now().Add(48 * time.Hour).Unix()
+	idExp := time.Now().Add(48 * time.Hour).Unix()
+	creds := &codexCredentials{
+		Tokens: codexTokens{
+			AccessToken: makeJWT(accessExp),
+			IDToken:     makeJWT(idExp),
+		},
+	}
+	if codexNeedsRefresh(creds) {
+		t.Error("expected no refresh needed when both access and id token are valid")
 	}
 }
 
@@ -370,5 +417,31 @@ func TestClaudeCredPath_NoneSet(t *testing.T) {
 	_, err := claudeCredPath()
 	if err == nil {
 		t.Error("expected error when no env vars are set")
+	}
+}
+
+func TestCodexCredPath_PrefersExistingFallbackFile(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "host-codex")
+	homeDir := filepath.Join(dir, "home")
+	homeCodexDir := filepath.Join(homeDir, ".codex")
+
+	if err := os.MkdirAll(homeCodexDir, 0o755); err != nil {
+		t.Fatalf("mkdir home codex dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(homeCodexDir, "auth.json"), []byte(`{"tokens":{}}`), 0o600); err != nil {
+		t.Fatalf("write auth.json: %v", err)
+	}
+
+	t.Setenv("CODEX_CONFIG_DIR", configDir)
+	t.Setenv("CONTAINER_HOME", homeDir)
+
+	p, err := codexCredPath()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := filepath.Join(homeCodexDir, "auth.json")
+	if p != want {
+		t.Errorf("got %q, want %q", p, want)
 	}
 }
