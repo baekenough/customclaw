@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -21,12 +20,9 @@ import (
 )
 
 const (
-	defaultAlertChannel  = "C0AMBNY135Z"
-	defaultClaudeCLI     = "claude"
-	defaultContainerHome = "/home/appuser"
-	claudeTimeout        = 30 * time.Second
-	httpTimeout          = 10 * time.Second
-	probeInterval        = 30 * time.Minute
+	defaultAlertChannel = "C0AMBNY135Z"
+	httpTimeout         = 10 * time.Second
+	probeInterval       = 30 * time.Minute
 )
 
 // stateTracker guards the previous-status map used for alert deduplication.
@@ -47,96 +43,50 @@ type checkResult struct {
 // Provider checks
 // ---------------------------------------------------------------------------
 
-// checkClaude runs the Claude CLI as a subprocess and inspects its JSON output.
-// Returns ("ok", "") on success, ("error", msg) on any failure.
+// checkClaude validates the Anthropic API key via a lightweight Messages API call.
+// Returns ("unconfigured", "") when ANTHROPIC_API_KEY is absent.
 func checkClaude(ctx context.Context) checkResult {
-	cliPath := os.Getenv("CLAUDE_CLI_PATH")
-	if cliPath == "" {
-		cliPath = defaultClaudeCLI
-	}
-	homeDir := os.Getenv("CONTAINER_HOME")
-	if homeDir == "" {
-		homeDir = defaultContainerHome
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return checkResult{"unconfigured", ""}
 	}
 
-	execCtx, cancel := context.WithTimeout(ctx, claudeTimeout)
+	reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
 	defer cancel()
 
-	args := []string{
-		"-p", ".",
-		"--model", "haiku",
-		"--max-turns", "1",
-		"--output-format", "json",
+	// Use a minimal Messages API call to verify the key.
+	payload := []byte(`{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"."}]}`)
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(payload))
+	if err != nil {
+		return checkResult{"error", err.Error()}
 	}
-	cmd := exec.CommandContext(execCtx, cliPath, args...)
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("Content-Type", "application/json")
 
-	// Inherit host environment and override HOME for container credential resolution.
-	env := os.Environ()
-	env = appendOrReplace(env, "HOME="+homeDir)
-	cmd.Env = env
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
-
-	output := strings.TrimSpace(stdout.String())
-	if output == "" {
-		output = strings.TrimSpace(stderr.String())
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		if reqCtx.Err() == context.DeadlineExceeded {
+			return checkResult{"error", "Anthropic API timed out"}
+		}
+		return checkResult{"error", err.Error()}
 	}
+	defer func() { _ = resp.Body.Close() }()
 
-	if runErr != nil {
-		// FileNotFoundError equivalent: exec.ErrNotFound or "executable file not found"
-		if strings.Contains(runErr.Error(), "executable file not found") ||
-			strings.Contains(runErr.Error(), "no such file") {
-			return checkResult{"error", fmt.Sprintf("Claude CLI not found at path: %s", cliPath)}
-		}
-		// Context deadline exceeded maps to timeout.
-		if execCtx.Err() == context.DeadlineExceeded {
-			return checkResult{"error", "Claude CLI timed out after 30 seconds"}
-		}
-		if output != "" {
-			return checkResult{"error", output}
-		}
-		return checkResult{"error", runErr.Error()}
-	}
-
-	if output == "" {
+	switch resp.StatusCode {
+	case http.StatusOK:
 		return checkResult{"ok", ""}
-	}
-
-	var data map[string]any
-	if err := json.Unmarshal([]byte(output), &data); err != nil {
-		// Non-JSON output with zero exit — treat as success.
-		return checkResult{"ok", ""}
-	}
-
-	isError, _ := data["is_error"].(bool)
-	if !isError {
-		return checkResult{"ok", ""}
-	}
-
-	// is_error: true — inspect for authentication failures.
-	raw, _ := json.Marshal(data)
-	rawStr := string(raw)
-	if strings.Contains(rawStr, "authentication_error") || strings.Contains(rawStr, "expired") {
-		errVal := data["error"]
-		switch v := errVal.(type) {
-		case map[string]any:
-			if msg, ok := v["message"].(string); ok {
-				return checkResult{"error", msg}
-			}
-		case string:
-			return checkResult{"error", v}
+	case http.StatusUnauthorized:
+		msg := extractErrorMessage(resp.Body)
+		if msg == "" {
+			msg = "invalid or expired API key"
 		}
-		return checkResult{"error", rawStr}
+		return checkResult{"error", msg}
+	default:
+		body := readBodyTruncated(resp.Body, 200)
+		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body)}
 	}
-
-	if errVal, ok := data["error"].(string); ok && errVal != "" {
-		return checkResult{"error", errVal}
-	}
-	return checkResult{"error", rawStr}
 }
 
 // checkOpenAI validates the OpenAI API key via a lightweight GET to /v1/models.
@@ -385,18 +335,6 @@ func Start(ctx context.Context, pool *pgxpool.Pool) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-// appendOrReplace adds key=value to env, replacing an existing entry for key.
-func appendOrReplace(env []string, kv string) []string {
-	key := kv[:strings.IndexByte(kv, '=')]
-	for i, e := range env {
-		if strings.HasPrefix(e, key+"=") {
-			env[i] = kv
-			return env
-		}
-	}
-	return append(env, kv)
-}
 
 // extractErrorMessage reads a JSON response body and returns the error message
 // at .error.message, falling back to the raw body text on failure.

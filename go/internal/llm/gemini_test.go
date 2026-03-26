@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"os"
 	"testing"
 )
 
@@ -40,50 +39,19 @@ func TestResolveGeminiModel(t *testing.T) {
 // NewGeminiProvider — construction
 // ---------------------------------------------------------------------------
 
-func TestNewGeminiProvider_DefaultPath(t *testing.T) {
-	// t.Setenv modifies a process-wide variable: cannot run in parallel.
-	t.Setenv("GEMINI_CLI_PATH", "")
-
+func TestNewGeminiProvider_ReturnsNonNil(t *testing.T) {
+	t.Parallel()
 	p := NewGeminiProvider()
 	if p == nil {
 		t.Fatal("NewGeminiProvider() returned nil")
 	}
-	if p.cliPath != "gemini" {
-		t.Errorf("cliPath = %q, want %q", p.cliPath, "gemini")
-	}
+}
+
+func TestNewGeminiProvider_Name(t *testing.T) {
+	t.Parallel()
+	p := NewGeminiProvider()
 	if p.Name() != "gemini" {
 		t.Errorf("Name() = %q, want %q", p.Name(), "gemini")
-	}
-}
-
-func TestNewGeminiProvider_CustomPath(t *testing.T) {
-	// t.Setenv modifies a process-wide variable: cannot run in parallel.
-	t.Setenv("GEMINI_CLI_PATH", "/usr/local/bin/gemini-custom")
-
-	p := NewGeminiProvider()
-	if p.cliPath != "/usr/local/bin/gemini-custom" {
-		t.Errorf("cliPath = %q, want %q", p.cliPath, "/usr/local/bin/gemini-custom")
-	}
-}
-
-func TestNewGeminiProvider_PicksUpEnvVar(t *testing.T) {
-	// t.Setenv modifies a process-wide variable: cannot run in parallel.
-	const customPath = "/opt/gemini/bin/gemini"
-	t.Setenv("GEMINI_CLI_PATH", customPath)
-
-	p := NewGeminiProvider()
-	if p.cliPath != customPath {
-		t.Errorf("expected cliPath=%q from env var, got %q", customPath, p.cliPath)
-	}
-}
-
-func TestNewGeminiProvider_ContainerHomeNotRequired(t *testing.T) {
-	t.Parallel()
-	// Construction should succeed regardless of CONTAINER_HOME.
-	_ = os.Unsetenv("CONTAINER_HOME")
-	p := NewGeminiProvider()
-	if p == nil {
-		t.Fatal("NewGeminiProvider() returned nil when CONTAINER_HOME unset")
 	}
 }
 

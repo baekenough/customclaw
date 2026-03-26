@@ -21,23 +21,16 @@ func TestNewProvider_Claude(t *testing.T) {
 	}
 }
 
-func TestNewProvider_Codex(t *testing.T) {
+func TestNewProvider_OpenAI(t *testing.T) {
 	t.Parallel()
-	// Both "codex" and "openai" map to the Codex CLI subprocess provider.
-	// The provider Name() returns "codex" (not "openai") because the backing
-	// implementation uses the Codex CLI, not the OpenAI REST API SDK.
-	for _, name := range []string{"codex", "openai"} {
-		name := name
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			p, err := NewProvider(name)
-			if err != nil {
-				t.Fatalf("NewProvider(%q) error: %v", name, err)
-			}
-			if p.Name() != "codex" {
-				t.Errorf("Name() = %q, want %q", p.Name(), "codex")
-			}
-		})
+	// "openai" maps to the OpenAI Chat Completions API provider.
+	// Name() returns "openai".
+	p, err := NewProvider("openai")
+	if err != nil {
+		t.Fatalf("NewProvider(\"openai\") error: %v", err)
+	}
+	if p.Name() != "openai" {
+		t.Errorf("Name() = %q, want %q", p.Name(), "openai")
 	}
 }
 
@@ -57,5 +50,15 @@ func TestNewProvider_Unknown(t *testing.T) {
 	_, err := NewProvider("unknown-llm")
 	if err == nil {
 		t.Fatal("NewProvider(\"unknown-llm\") expected error, got nil")
+	}
+}
+
+// TestNewProvider_Codex verifies that the old "codex" name now returns
+// an unknown provider error (callers should use "openai" instead).
+func TestNewProvider_Codex_Removed(t *testing.T) {
+	t.Parallel()
+	_, err := NewProvider("codex")
+	if err == nil {
+		t.Fatal("NewProvider(\"codex\") expected error after codex alias removal, got nil")
 	}
 }

@@ -35,17 +35,17 @@ func TestCheckGemini_Unconfigured(t *testing.T) {
 	}
 }
 
-// TestCheckClaude_NotFound verifies that a nonexistent CLI path returns "error"
-// with an informative message, rather than panicking or hanging.
-func TestCheckClaude_NotFound(t *testing.T) {
-	t.Setenv("CLAUDE_CLI_PATH", "/nonexistent/path/to/claude-cli-that-does-not-exist")
+// TestCheckClaude_Unconfigured verifies that an absent ANTHROPIC_API_KEY yields
+// "unconfigured" without making any network calls.
+func TestCheckClaude_Unconfigured(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "")
 
 	result := checkClaude(context.Background())
 
-	if result.status != "error" {
-		t.Errorf("expected status %q, got %q", "error", result.status)
+	if result.status != "unconfigured" {
+		t.Errorf("expected status %q, got %q", "unconfigured", result.status)
 	}
-	if result.errMsg == "" {
-		t.Error("expected non-empty errMsg when CLI path does not exist")
+	if result.errMsg != "" {
+		t.Errorf("expected empty errMsg, got %q", result.errMsg)
 	}
 }

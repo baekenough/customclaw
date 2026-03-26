@@ -1,198 +1,123 @@
 package llm
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"strings"
+	"log/slog"
+
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 )
 
-// codexModelAliases maps short friendly names to Codex model IDs.
+// openaiModelAliases maps short friendly names to OpenAI model IDs.
 // Unknown aliases are passed through unchanged.
-var codexModelAliases = map[string]string{
+var openaiModelAliases = map[string]string{
 	"gpt-5.4": "gpt-5.4",
 	"codex":   "gpt-5.4",
+	"gpt-4o":  "gpt-4o",
 }
 
-// resolveCodexModel returns the canonical Codex model ID for a given alias.
+// resolveOpenAIModel returns the canonical OpenAI model ID for a given alias.
 // If the alias is not found in the map and is non-empty, it is returned as-is.
 // An empty alias falls back to "gpt-5.4".
-func resolveCodexModel(alias string) string {
+func resolveOpenAIModel(alias string) string {
 	if alias == "" {
 		return "gpt-5.4"
 	}
-	if full, ok := codexModelAliases[alias]; ok {
+	if full, ok := openaiModelAliases[alias]; ok {
 		return full
 	}
 	return alias
 }
 
-// CodexProvider implements Provider by invoking the Codex CLI as a subprocess.
-// Codex uses ChatGPT OAuth which is incompatible with the OpenAI API SDK, so
-// we shell out to the CLI instead. This mirrors the Python _run_codex_cli
-// pattern from the bot_engine.
-type CodexProvider struct {
-	cliPath string
+// resolveCodexModel is kept for backwards-compatibility with existing tests.
+// It delegates to resolveOpenAIModel.
+var resolveCodexModel = resolveOpenAIModel
+
+// OpenAIProvider implements Provider using the OpenAI Chat Completions API SDK.
+// Authentication is handled automatically via the OPENAI_API_KEY environment
+// variable, which is read by the SDK on client construction.
+type OpenAIProvider struct {
+	client *openai.Client
 }
 
-// NewCodexProvider constructs a CodexProvider. The CLI binary path is read
-// from the CODEX_CLI_PATH environment variable; it defaults to "codex" (i.e.
-// resolved via PATH at execution time).
-func NewCodexProvider() *CodexProvider {
-	path := os.Getenv("CODEX_CLI_PATH")
-	if path == "" {
-		path = "codex"
+// NewOpenAIProvider constructs an OpenAIProvider. The SDK reads OPENAI_API_KEY
+// from the environment automatically.
+func NewOpenAIProvider() *OpenAIProvider {
+	client := openai.NewClient(option.WithAPIKey(""))
+	return &OpenAIProvider{client: &client}
+}
+
+// CodexProvider is a backwards-compatible alias for OpenAIProvider.
+// It exists so that existing references to NewCodexProvider continue to work.
+type CodexProvider = OpenAIProvider
+
+// NewCodexProvider constructs an OpenAIProvider under the legacy Codex name.
+func NewCodexProvider() *OpenAIProvider {
+	return NewOpenAIProvider()
+}
+
+// Name returns "openai".
+func (p *OpenAIProvider) Name() string { return "openai" }
+
+// Complete sends req to the OpenAI Chat Completions API and returns the result.
+//
+// The system prompt is passed as a system message, and the user message as a
+// user message. MaxTurns is used to derive max_completion_tokens (MaxTurns * 4096),
+// defaulting to 8192 when MaxTurns is zero or negative.
+//
+// FullAgent and WorkDir are not supported by the Chat Completions API; a warning
+// is logged when FullAgent is true.
+func (p *OpenAIProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
+	if req.FullAgent {
+		slog.Warn("OpenAIProvider: FullAgent mode is not supported by the Chat Completions API; ignoring",
+			"work_dir", req.WorkDir,
+		)
 	}
-	return &CodexProvider{cliPath: path}
-}
 
-// Name returns "codex".
-func (p *CodexProvider) Name() string { return "codex" }
+	model := resolveOpenAIModel(req.Model)
 
-// Complete invokes the Codex CLI as a subprocess and returns its output.
-//
-// The command executed is:
-//
-//	codex exec <prompt> -m <model> --dangerously-bypass-approvals-and-sandbox
-//
-// HOME is set from the CONTAINER_HOME environment variable so the Codex CLI
-// can locate its OAuth credentials inside the container. NO_COLOR=1 suppresses
-// ANSI escape sequences in the output.
-//
-// If the system prompt is non-empty it is prepended to the user message,
-// separated by a double newline. The Codex CLI does not have a separate system
-// prompt flag, so both are merged into the single prompt argument.
-//
-// The raw CLI output is stripped of the metadata header/footer that Codex
-// emits before the actual response text.
-func (p *CodexProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
-	model := resolveCodexModel(req.Model)
+	maxTokens := int64(8192)
+	if req.MaxTurns > 0 {
+		maxTokens = int64(req.MaxTurns) * 4096
+	}
 
-	prompt := req.UserMessage
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 2)
 	if req.SystemPrompt != "" {
-		prompt = req.SystemPrompt + "\n\n" + prompt
+		messages = append(messages, openai.SystemMessage(req.SystemPrompt))
+	}
+	messages = append(messages, openai.UserMessage(req.UserMessage))
+
+	params := openai.ChatCompletionNewParams{
+		Model:               openai.ChatModel(model),
+		Messages:            messages,
+		MaxCompletionTokens: openai.Int(maxTokens),
 	}
 
-	args := []string{
-		"exec", prompt,
-		"-m", model,
-		"--dangerously-bypass-approvals-and-sandbox",
+	slog.Info("calling openai chat completions api",
+		"model", model,
+		"max_completion_tokens", maxTokens,
+	)
+
+	completion, err := p.client.Chat.Completions.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("openai api error: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, p.cliPath, args...)
-
-	// Build environment: inherit host env, then override HOME for container
-	// credential resolution and suppress colour output.
-	env := os.Environ()
-	if containerHome := os.Getenv("CONTAINER_HOME"); containerHome != "" {
-		env = appendOrReplace(env, "HOME="+containerHome)
-	}
-	env = appendOrReplace(env, "NO_COLOR=1")
-	cmd.Env = env
-
-	if req.WorkDir != "" {
-		cmd.Dir = req.WorkDir
-	}
-	cmd.Stdin = nil // equivalent to subprocess.DEVNULL
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		errSnippet := stderr.String()
-		if len(errSnippet) > 500 {
-			errSnippet = errSnippet[:500]
-		}
-		return nil, fmt.Errorf("codex cli error (%w): %s", err, errSnippet)
+	if len(completion.Choices) == 0 {
+		return nil, fmt.Errorf("openai api returned no choices")
 	}
 
-	output := strings.TrimSpace(stdout.String())
-	if output == "" {
-		return nil, fmt.Errorf("codex cli returned empty output")
+	text := completion.Choices[0].Message.Content
+	if text == "" {
+		return nil, fmt.Errorf("openai api returned empty content")
 	}
 
-	output = stripCodexMetadata(output)
-
-	return &Response{
-		Text: output,
-		Usage: &UsageInfo{
-			Model: model,
-		},
-	}, nil
-}
-
-// stripCodexMetadata removes the metadata header and footer that the Codex
-// CLI emits around the actual response. The header includes lines like:
-//
-//	OpenAI Codex
-//	-----------
-//	workdir:  /path
-//	model:    gpt-5.4
-//	provider: openai
-//	approval: ...
-//	sandbox:  ...
-//	reasoning ...
-//	session id: ...
-//
-// The footer lines include bare "codex", "tokens used", and digit-only lines.
-// Content lines between the header and footer are preserved verbatim.
-func stripCodexMetadata(output string) string {
-	lines := strings.Split(output, "\n")
-	content := make([]string, 0, len(lines))
-	skipHeader := true
-
-	for _, line := range lines {
-		if skipHeader {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(trimmed, "OpenAI Codex") ||
-				strings.HasPrefix(trimmed, "--------") ||
-				strings.HasPrefix(trimmed, "workdir:") ||
-				strings.HasPrefix(trimmed, "model:") ||
-				strings.HasPrefix(trimmed, "provider:") ||
-				strings.HasPrefix(trimmed, "approval:") ||
-				strings.HasPrefix(trimmed, "sandbox:") ||
-				strings.HasPrefix(trimmed, "reasoning") ||
-				strings.HasPrefix(trimmed, "session id:") {
-				continue
-			}
-			skipHeader = false
-		}
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "codex" || trimmed == "tokens used" || isAllDigits(trimmed) {
-			continue
-		}
-		content = append(content, line)
+	usage := &UsageInfo{
+		InputTokens:  int(completion.Usage.PromptTokens),
+		OutputTokens: int(completion.Usage.CompletionTokens),
+		Model:        completion.Model,
 	}
 
-	return strings.TrimSpace(strings.Join(content, "\n"))
-}
-
-// isAllDigits reports whether s consists entirely of ASCII digit characters.
-// An empty string returns false.
-func isAllDigits(s string) bool {
-	if s == "" {
-		return false
-	}
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// appendOrReplace appends key=value to env, replacing any existing entry with
-// the same key. This avoids duplicate environment variable entries.
-func appendOrReplace(env []string, entry string) []string {
-	key := strings.SplitN(entry, "=", 2)[0] + "="
-	for i, e := range env {
-		if strings.HasPrefix(e, key) {
-			env[i] = entry
-			return env
-		}
-	}
-	return append(env, entry)
+	return &Response{Text: text, Usage: usage}, nil
 }

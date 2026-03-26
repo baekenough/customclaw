@@ -1,31 +1,27 @@
 package llm
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
-	"strings"
-	"time"
+
+	anthropic "github.com/anthropics/anthropic-sdk-go"
 )
 
-// claudeModelAliases maps short friendly names to Claude CLI model IDs.
+// claudeModelAliases maps short friendly names to Anthropic Messages API model IDs.
 // Unknown aliases are passed through unchanged.
 var claudeModelAliases = map[string]string{
-	"opus":   "opus",
-	"sonnet": "sonnet",
-	"haiku":  "haiku",
+	"opus":   "claude-opus-4-6-20260311",
+	"sonnet": "claude-sonnet-4-6-20260311",
+	"haiku":  "claude-haiku-4-5-20251001",
 }
 
-// resolveClaudeModel returns the Claude CLI model name for a given alias.
+// resolveClaudeModel returns the Anthropic API model ID for a given alias.
 // If the alias is not found in the map and is non-empty, it is returned as-is.
 // An empty alias falls back to "sonnet".
 func resolveClaudeModel(alias string) string {
 	if alias == "" {
-		return "sonnet"
+		return claudeModelAliases["sonnet"]
 	}
 	if m, ok := claudeModelAliases[alias]; ok {
 		return m
@@ -33,167 +29,96 @@ func resolveClaudeModel(alias string) string {
 	return alias
 }
 
-// ClaudeProvider implements Provider by calling the Claude CLI binary.
-// Authentication is handled by the CLI itself via its own OAuth credentials,
-// making the Anthropic REST API SDK unnecessary.
+// ClaudeProvider implements Provider using the Anthropic Messages API SDK.
+// Authentication is handled automatically via the ANTHROPIC_API_KEY environment
+// variable, which is read by the SDK on client construction.
 type ClaudeProvider struct {
-	cliPath string
+	client anthropic.Client
 }
 
-// NewClaudeProvider constructs a ClaudeProvider. The CLI binary path is read
-// from the CLAUDE_CLI_PATH environment variable; it defaults to "claude"
-// (resolved via PATH at execution time).
+// NewClaudeProvider constructs a ClaudeProvider. The SDK reads ANTHROPIC_API_KEY
+// from the environment automatically. No configuration is required at construction
+// time beyond the environment variable being set at call time.
 func NewClaudeProvider() *ClaudeProvider {
-	path := os.Getenv("CLAUDE_CLI_PATH")
-	if path == "" {
-		path = "claude"
-	}
-	return &ClaudeProvider{cliPath: path}
+	client := anthropic.NewClient()
+	return &ClaudeProvider{client: client}
 }
 
 // Name returns "claude".
 func (p *ClaudeProvider) Name() string { return "claude" }
 
-// Complete invokes the Claude CLI as a subprocess and returns its output.
+// Complete sends req to the Anthropic Messages API and returns the result.
 //
-// The command executed is:
+// The system prompt is passed via the system parameter (array of TextBlockParam).
+// The user message is passed as a user turn. MaxTurns is used to derive max_tokens
+// (MaxTurns * 4096), defaulting to 8192 when MaxTurns is zero or negative.
 //
-//	claude -p <prompt> --model <model> --max-turns <n> --output-format json
-//
-// When FullAgent is true, --dangerously-skip-permissions is added and the
-// timeout is extended proportionally to max_turns.
-//
-// HOME is set from CONTAINER_HOME so the CLI can locate its OAuth credentials
-// inside the container. NO_COLOR=1 suppresses ANSI escape sequences.
+// FullAgent and WorkDir are not supported by the Messages API and are ignored;
+// a warning is logged when FullAgent is true.
 func (p *ClaudeProvider) Complete(ctx context.Context, req *Request) (*Response, error) {
-	model := resolveClaudeModel(req.Model)
-	maxTurns := req.MaxTurns
-	if maxTurns == 0 {
-		maxTurns = 5
-	}
-
-	// Build combined prompt: the Claude CLI takes a single -p argument.
-	prompt := req.UserMessage
-	if req.SystemPrompt != "" {
-		prompt = req.SystemPrompt + "\n\n" + req.UserMessage
-	}
-
-	args := []string{
-		"-p", prompt,
-		"--model", model,
-		"--max-turns", fmt.Sprintf("%d", maxTurns),
-		"--output-format", "json",
-	}
-
-	timeout := 180 // default seconds
 	if req.FullAgent {
-		args = append(args, "--dangerously-skip-permissions")
-		timeout = maxTurns * 60
+		slog.Warn("ClaudeProvider: FullAgent mode is not supported by the Messages API; ignoring",
+			"work_dir", req.WorkDir,
+		)
 	}
 
-	execCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
-	defer cancel()
+	model := resolveClaudeModel(req.Model)
 
-	cmd := exec.CommandContext(execCtx, p.cliPath, args...)
-
-	// Build environment: inherit host env, override HOME for container
-	// credential resolution, suppress colour output.
-	env := os.Environ()
-	if containerHome := os.Getenv("CONTAINER_HOME"); containerHome != "" {
-		env = appendOrReplace(env, "HOME="+containerHome)
+	maxTokens := int64(8192)
+	if req.MaxTurns > 0 {
+		maxTokens = int64(req.MaxTurns) * 4096
 	}
-	env = appendOrReplace(env, "NO_COLOR=1")
-	cmd.Env = env
 
-	if req.WorkDir != "" {
-		cmd.Dir = req.WorkDir
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(model),
+		MaxTokens: maxTokens,
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(req.UserMessage)),
+		},
 	}
-	cmd.Stdin = nil // equivalent to subprocess.DEVNULL
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	if req.SystemPrompt != "" {
+		params.System = []anthropic.TextBlockParam{
+			{Text: req.SystemPrompt},
+		}
+	}
 
-	slog.Info("running claude cli",
+	slog.Info("calling anthropic messages api",
 		"model", model,
-		"max_turns", maxTurns,
-		"full_agent", req.FullAgent,
+		"max_tokens", maxTokens,
 	)
 
-	if err := cmd.Run(); err != nil {
-		errMsg := stderr.String()
-		if len(errMsg) > 500 {
-			errMsg = errMsg[:500]
-		}
-		return nil, fmt.Errorf("claude cli error (exit %v): %s", err, errMsg)
+	msg, err := p.client.Messages.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic api error: %w", err)
 	}
 
-	output := strings.TrimSpace(stdout.String())
-	if output == "" {
-		return nil, fmt.Errorf("claude cli returned empty output")
-	}
-
-	text, usage := parseClaudeJSONOutput(output)
+	text := extractClaudeText(msg)
 	if text == "" {
-		return nil, fmt.Errorf("claude cli returned no result text")
+		return nil, fmt.Errorf("anthropic api returned no text content")
+	}
+
+	usage := &UsageInfo{
+		InputTokens:         int(msg.Usage.InputTokens),
+		OutputTokens:        int(msg.Usage.OutputTokens),
+		CacheReadTokens:     int(msg.Usage.CacheReadInputTokens),
+		CacheCreationTokens: int(msg.Usage.CacheCreationInputTokens),
+		Model:               string(msg.Model),
 	}
 
 	return &Response{Text: text, Usage: usage}, nil
 }
 
-// parseClaudeJSONOutput parses Claude CLI --output-format json response.
-// Returns (text, usage). On parse failure the raw output is returned as plain text.
-func parseClaudeJSONOutput(raw string) (string, *UsageInfo) {
-	var data map[string]any
-	if err := json.Unmarshal([]byte(raw), &data); err != nil {
-		// Not JSON — return raw output as plain text (e.g. plain-text mode).
-		return raw, nil
-	}
-
-	result, ok := data["result"].(string)
-	if !ok {
-		// Detect CLI status/error JSON (type=result but no result text).
-		if dataType, _ := data["type"].(string); dataType == "result" {
-			subtype, _ := data["subtype"].(string)
-			if subtype == "error_max_turns" {
-				slog.Warn("claude cli hit max_turns limit")
+// extractClaudeText concatenates all text content blocks from the response.
+func extractClaudeText(msg *anthropic.Message) string {
+	var out string
+	for _, block := range msg.Content {
+		if block.Type == "text" {
+			if out != "" {
+				out += "\n"
 			}
-			return "", extractUsageFromCLIJSON(data)
-		}
-		return raw, nil
-	}
-
-	usage := extractUsageFromCLIJSON(data)
-	return result, usage
-}
-
-// extractUsageFromCLIJSON extracts token usage and cost from a parsed Claude
-// CLI JSON response. Returns a non-nil UsageInfo even when no usage fields are present.
-func extractUsageFromCLIJSON(data map[string]any) *UsageInfo {
-	info := &UsageInfo{}
-	if u, ok := data["usage"].(map[string]any); ok {
-		if v, ok := u["input_tokens"].(float64); ok {
-			info.InputTokens = int(v)
-		}
-		if v, ok := u["output_tokens"].(float64); ok {
-			info.OutputTokens = int(v)
-		}
-		if v, ok := u["cache_read_input_tokens"].(float64); ok {
-			info.CacheReadTokens = int(v)
-		}
-		if v, ok := u["cache_creation_input_tokens"].(float64); ok {
-			info.CacheCreationTokens = int(v)
+			out += block.Text
 		}
 	}
-	if v, ok := data["total_cost_usd"].(float64); ok {
-		info.CostUSD = &v
-	}
-	// modelUsage maps model ID → usage breakdown; take the first key as Model.
-	if mu, ok := data["modelUsage"].(map[string]any); ok {
-		for modelID := range mu {
-			info.Model = modelID
-			break
-		}
-	}
-	return info
+	return out
 }

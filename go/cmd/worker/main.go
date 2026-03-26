@@ -18,7 +18,6 @@ import (
 	"github.com/baekenough/customclaw/internal/memory"
 	"github.com/baekenough/customclaw/internal/platform"
 	rediswrapper "github.com/baekenough/customclaw/internal/redis"
-	"github.com/baekenough/customclaw/internal/tokenrefresh"
 	"github.com/baekenough/customclaw/internal/tools"
 	"github.com/baekenough/customclaw/internal/usage"
 	"github.com/baekenough/customclaw/internal/worker"
@@ -83,13 +82,9 @@ func run() error {
 		botsMap[cfg.ID] = cfg
 	}
 
-	// LLM providers — all use CLI subprocess execution.
-	// Authentication is handled by each CLI binary's own credential management.
-	// CLI binary paths are configured via environment variables:
-	//   CLAUDE_CLI_PATH (default: "claude")
-	//   CODEX_CLI_PATH  (default: "codex")
-	//   GEMINI_CLI_PATH (default: "gemini")
-	// HOME inside the container is set via CONTAINER_HOME env var.
+	// LLM providers — all use direct API SDK calls.
+	// Authentication is handled via environment variables:
+	//   ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
 	claudeProvider := llm.NewClaudeProvider()
 	codexProvider := llm.NewCodexProvider()
 	geminiProvider := llm.NewGeminiProvider()
@@ -181,9 +176,6 @@ func run() error {
 	// Credential probe — periodically checks LLM provider credentials and
 	// stores results in the credential_status table. Fixes issue #32.
 	credprobe.Start(ctx, store.Pool())
-
-	// Token auto-refresh — proactively refreshes OAuth tokens before expiry.
-	tokenrefresh.Start(ctx)
 
 	// Analysis consumer — processes GitHub issue/PR analysis requests.
 	if err := rediswrapper.EnsureStreamGroup(ctx, rdb, analysis.AnalysisStream, analysis.AnalysisGroup); err != nil {
