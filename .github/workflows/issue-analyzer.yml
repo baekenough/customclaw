@@ -19,6 +19,7 @@ jobs:
   trigger-analysis:
     runs-on: ubuntu-latest
     strategy:
+      max-parallel: 1
       matrix:
         issue_number: ${{ fromJSON(format('[{0}]', github.event.inputs.issue_numbers || github.event.issue.number)) }}
     steps:
@@ -54,8 +55,7 @@ jobs:
             -H "Authorization: Bearer ${ACCESS_TOKEN}" \
             -H "Content-Type: application/json" \
             -d "{
-              \"dag_run_id\": \"manual_${ISSUE_NUMBER}_$(date +%s)\",
-              \"logical_date\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
+              \"dag_run_id\": \"manual_${ISSUE_NUMBER}_$(date +%s%N)\",
               \"conf\": {\"issue_number\": ${ISSUE_NUMBER}, \"repo\": \"${REPO}\"},
               \"note\": \"Manual trigger for issue #${ISSUE_NUMBER}\"
             }")
