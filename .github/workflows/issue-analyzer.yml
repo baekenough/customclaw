@@ -55,6 +55,7 @@ jobs:
             -H "Content-Type: application/json" \
             -d "{
               \"dag_run_id\": \"manual_${ISSUE_NUMBER}_$(date +%s%N)\",
+              \"logical_date\": \"$(date -u -d "+${ISSUE_NUMBER} seconds" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v+${ISSUE_NUMBER}S +%Y-%m-%dT%H:%M:%SZ)\",
               \"conf\": {\"issue_number\": ${ISSUE_NUMBER}, \"repo\": \"${REPO}\"},
               \"note\": \"Manual trigger for issue #${ISSUE_NUMBER}\"
             }")
