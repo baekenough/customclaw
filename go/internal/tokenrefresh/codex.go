@@ -28,13 +28,47 @@ const (
 //  1. CODEX_CONFIG_DIR/auth.json
 //  2. CONTAINER_HOME/.codex/auth.json
 func codexCredPath() (string, error) {
+	var primary string
 	if dir := os.Getenv("CODEX_CONFIG_DIR"); dir != "" {
-		return filepath.Join(dir, "auth.json"), nil
+		primary = filepath.Join(dir, "auth.json")
 	}
+
+	var fallback string
 	if home := os.Getenv("CONTAINER_HOME"); home != "" {
-		return filepath.Join(home, ".codex", "auth.json"), nil
+		fallback = filepath.Join(home, ".codex", "auth.json")
+	}
+
+	if existingRegularFile(primary) {
+		return primary, nil
+	}
+	if existingRegularFile(fallback) {
+		if primary != "" && primary != fallback {
+			slog.Warn("codex auth path mismatch; using CONTAINER_HOME fallback",
+				"configured_path", primary,
+				"fallback_path", fallback,
+			)
+		}
+		return fallback, nil
+	}
+
+	if primary != "" {
+		return primary, nil
+	}
+	if fallback != "" {
+		return fallback, nil
 	}
 	return "", fmt.Errorf("none of CODEX_CONFIG_DIR or CONTAINER_HOME is set")
+}
+
+func existingRegularFile(path string) bool {
+	if path == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode().IsRegular()
 }
 
 // jwtExpiry decodes the payload of a JWT (without signature verification) and
@@ -47,7 +81,7 @@ func jwtExpiry(token string) (int64, error) {
 	}
 
 	// JWT payload uses base64url encoding without padding.
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	payload, err := decodeJWTPayload(parts[1])
 	if err != nil {
 		return 0, fmt.Errorf("decode JWT payload: %w", err)
 	}
@@ -64,17 +98,36 @@ func jwtExpiry(token string) (int64, error) {
 	return claims.Exp, nil
 }
 
+func decodeJWTPayload(payloadPart string) ([]byte, error) {
+	if payload, err := base64.RawURLEncoding.DecodeString(payloadPart); err == nil {
+		return payload, nil
+	}
+	return base64.URLEncoding.DecodeString(payloadPart)
+}
+
 // codexNeedsRefresh reports whether the access token in creds should be
 // refreshed: either parsing fails (treat as expired) or the token expires
 // within codexRefreshWindow.
 func codexNeedsRefresh(creds *codexCredentials) bool {
-	exp, err := jwtExpiry(creds.Tokens.AccessToken)
+	accessExp, err := jwtExpiry(creds.Tokens.AccessToken)
 	if err != nil {
 		slog.Warn("codex: could not parse access token expiry; assuming refresh needed", "error", err)
 		return true
 	}
-	expiresAt := time.Unix(exp, 0)
-	return time.Until(expiresAt) < codexRefreshWindow
+	if time.Until(time.Unix(accessExp, 0)) < codexRefreshWindow {
+		return true
+	}
+
+	idToken := strings.TrimSpace(creds.Tokens.IDToken)
+	if idToken == "" {
+		return false
+	}
+	idExp, err := jwtExpiry(idToken)
+	if err != nil {
+		slog.Warn("codex: could not parse id token expiry; assuming refresh needed", "error", err)
+		return true
+	}
+	return time.Until(time.Unix(idExp, 0)) < codexRefreshWindow
 }
 
 // refreshCodex loads the Codex auth file, checks whether a refresh is needed,
@@ -104,7 +157,12 @@ func refreshCodex(ctx context.Context) (bool, error) {
 		"expires_at", time.Unix(exp, 0).Format(time.RFC3339),
 	)
 
-	resp, err := doCodexRefresh(ctx, creds.Tokens.RefreshToken)
+	refreshToken := strings.TrimSpace(creds.Tokens.RefreshToken)
+	if refreshToken == "" {
+		return false, fmt.Errorf("codex credentials missing refresh_token")
+	}
+
+	resp, err := doCodexRefresh(ctx, refreshToken)
 	if err != nil {
 		return false, fmt.Errorf("codex token refresh request: %w", err)
 	}

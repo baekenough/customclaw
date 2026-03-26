@@ -47,6 +47,7 @@ services:
       BOTS_DIR: /app/bots
       HOME: ${CONTAINER_HOME}
       CONTAINER_HOME: ${CONTAINER_HOME}
+      CODEX_CONFIG_DIR: ${CONTAINER_HOME}/.codex
       # Claude OAuth
       CLAUDE_CREDENTIALS_PATH: ${CONTAINER_HOME}/.claude/.credentials.json
       # Codex CLI
