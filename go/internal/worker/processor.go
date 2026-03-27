@@ -176,14 +176,14 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 	}()
 	mem := <-memCh
 
-	systemPrompt := buildSystemPrompt(cfg, history, mem.results)
+	systemPrompt := buildSystemPrompt(cfg, mem.results)
 
 	var responseText string
 
 	if cfg.Claude.FullAgent {
 		// FullAgent mode: single LLM call with full context.
 		// No tool descriptions are injected; the model operates as a full agent.
-		responseText, err = p.callLLM(ctx, cfg, msg, systemPrompt, "")
+		responseText, err = p.callLLM(ctx, cfg, msg, systemPrompt, "", history)
 		if err != nil {
 			return "", err
 		}
@@ -194,7 +194,7 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 		if p.registry != nil {
 			toolDescs = p.registry.BuildToolDescriptions(cfg.ToolsEnabled)
 		}
-		phase1Text, err := p.callLLM(ctx, cfg, msg, systemPrompt, toolDescs)
+		phase1Text, err := p.callLLM(ctx, cfg, msg, systemPrompt, toolDescs, history)
 		if err != nil {
 			return "", err
 		}
@@ -232,7 +232,7 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 				Platform:  msg.Platform,
 				BotToken:  msg.BotToken,
 			}
-			responseText, err = p.callLLM(ctx, cfg, phase2Msg, systemPrompt, "")
+			responseText, err = p.callLLM(ctx, cfg, phase2Msg, systemPrompt, "", history)
 			if err != nil {
 				return "", err
 			}
@@ -318,20 +318,29 @@ func (p *Processor) selectProvider(cfg *config.BotConfig) llm.Provider {
 
 // callLLM assembles an llm.Request and calls the provider.
 // toolDescs is appended to the system prompt when non-empty.
+// history is passed as structured message turns to the LLM API.
 func (p *Processor) callLLM(
 	ctx context.Context,
 	cfg *config.BotConfig,
 	msg IncomingMessage,
 	systemPrompt, toolDescs string,
+	history []memory.Message,
 ) (string, error) {
 	system := systemPrompt
 	if toolDescs != "" {
 		system = strings.TrimSpace(system) + "\n\n" + toolDescs
 	}
 
+	// Convert conversation history to LLM message format.
+	llmHistory := make([]llm.HistoryMessage, len(history))
+	for i, h := range history {
+		llmHistory[i] = llm.HistoryMessage{Role: h.Role, Content: h.Content}
+	}
+
 	req := &llm.Request{
 		SystemPrompt: system,
 		UserMessage:  msg.Text,
+		History:      llmHistory,
 		Model:        cfg.Claude.Model,
 		MaxTurns:     cfg.Claude.MaxTurns,
 		FullAgent:    cfg.Claude.FullAgent,
@@ -442,9 +451,10 @@ func historyKey(msg IncomingMessage) string {
 	return "channel:" + msg.ChannelID
 }
 
-// buildSystemPrompt assembles the LLM system prompt from bot config,
-// conversation history, and retrieved memories.
-func buildSystemPrompt(cfg *config.BotConfig, history []memory.Message, memories []memory.SearchResult) string {
+// buildSystemPrompt assembles the LLM system prompt from bot config and
+// retrieved memories. Conversation history is passed separately as structured
+// message turns via callLLM, not embedded in the system prompt.
+func buildSystemPrompt(cfg *config.BotConfig, memories []memory.SearchResult) string {
 	var sb strings.Builder
 
 	if cfg.Persona.Personality != "" {
@@ -468,17 +478,6 @@ func buildSystemPrompt(cfg *config.BotConfig, history []memory.Message, memories
 		sb.WriteString("## Relevant context from memory\n")
 		for _, m := range memories {
 			sb.WriteString("- ")
-			sb.WriteString(m.Content)
-			sb.WriteString("\n")
-		}
-		sb.WriteString("\n")
-	}
-
-	if len(history) > 0 {
-		sb.WriteString("## Recent conversation history\n")
-		for _, m := range history {
-			sb.WriteString(m.Role)
-			sb.WriteString(": ")
 			sb.WriteString(m.Content)
 			sb.WriteString("\n")
 		}

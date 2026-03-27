@@ -88,9 +88,16 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		cfg.SystemInstruction = genai.NewContentFromText(req.SystemPrompt, genai.RoleUser)
 	}
 
-	contents := []*genai.Content{
-		genai.NewContentFromText(req.UserMessage, genai.RoleUser),
+	// Build contents array: history turns followed by the current user message.
+	contents := make([]*genai.Content, 0, len(req.History)+1)
+	for _, h := range req.History {
+		var role genai.Role = genai.RoleUser
+		if h.Role == "assistant" {
+			role = genai.RoleModel
+		}
+		contents = append(contents, genai.NewContentFromText(h.Content, role))
 	}
+	contents = append(contents, genai.NewContentFromText(req.UserMessage, genai.RoleUser))
 
 	slog.Info("calling gemini api",
 		"model", model,

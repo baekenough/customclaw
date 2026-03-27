@@ -84,9 +84,18 @@ func (p *OpenAIProvider) Complete(ctx context.Context, req *Request) (*Response,
 		maxTokens = int64(req.MaxTurns) * 4096
 	}
 
-	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 2)
+	// Build messages array: system prompt, history turns, then current user message.
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.History)+2)
 	if req.SystemPrompt != "" {
 		messages = append(messages, openai.SystemMessage(req.SystemPrompt))
+	}
+	for _, h := range req.History {
+		switch h.Role {
+		case "user":
+			messages = append(messages, openai.UserMessage(h.Content))
+		case "assistant":
+			messages = append(messages, openai.AssistantMessage(h.Content))
+		}
 	}
 	messages = append(messages, openai.UserMessage(req.UserMessage))
 

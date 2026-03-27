@@ -69,12 +69,22 @@ func (p *ClaudeProvider) Complete(ctx context.Context, req *Request) (*Response,
 		maxTokens = int64(req.MaxTurns) * 4096
 	}
 
+	// Build messages array: history turns followed by the current user message.
+	messages := make([]anthropic.MessageParam, 0, len(req.History)+1)
+	for _, h := range req.History {
+		switch h.Role {
+		case "user":
+			messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(h.Content)))
+		case "assistant":
+			messages = append(messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(h.Content)))
+		}
+	}
+	messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(req.UserMessage)))
+
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(model),
 		MaxTokens: maxTokens,
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(req.UserMessage)),
-		},
+		Messages:  messages,
 	}
 
 	if req.SystemPrompt != "" {

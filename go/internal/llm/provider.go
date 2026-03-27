@@ -3,12 +3,23 @@ package llm
 
 import "context"
 
+// HistoryMessage represents a single conversation turn passed to the LLM as a
+// structured message rather than embedded text in the system prompt.
+type HistoryMessage struct {
+	// Role is either "user" or "assistant".
+	Role    string
+	Content string
+}
+
 // Request encapsulates a single LLM call.
 type Request struct {
 	// SystemPrompt is prepended as the system message.
 	SystemPrompt string
 	// UserMessage is the human turn content.
 	UserMessage  string
+	// History contains prior conversation turns that are passed as structured
+	// message turns to the LLM API, not embedded in the system prompt.
+	History      []HistoryMessage
 	// Model is a short alias: "opus", "sonnet", or "haiku".
 	Model        string
 	MaxTurns     int

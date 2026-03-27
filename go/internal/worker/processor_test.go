@@ -196,7 +196,6 @@ func TestBuildSystemPrompt(t *testing.T) {
 	tests := []struct {
 		name     string
 		cfg      *config.BotConfig
-		history  []memory.Message
 		memories []memory.SearchResult
 		contains []string
 		absent   []string
@@ -230,19 +229,6 @@ func TestBuildSystemPrompt(t *testing.T) {
 			contains: []string{"GitHub repository: acme/backend"},
 		},
 		{
-			name: "with history",
-			cfg:  &config.BotConfig{},
-			history: []memory.Message{
-				{Role: "user", Content: "Hi there"},
-				{Role: "assistant", Content: "Hello!"},
-			},
-			contains: []string{
-				"## Recent conversation history",
-				"user: Hi there",
-				"assistant: Hello!",
-			},
-		},
-		{
 			name: "with memories",
 			cfg:  &config.BotConfig{},
 			memories: []memory.SearchResult{
@@ -270,9 +256,6 @@ func TestBuildSystemPrompt(t *testing.T) {
 					GithubRepo: "org/repo",
 				},
 			},
-			history: []memory.Message{
-				{Role: "user", Content: "question"},
-			},
 			memories: []memory.SearchResult{
 				{Content: "relevant fact"},
 			},
@@ -282,8 +265,6 @@ func TestBuildSystemPrompt(t *testing.T) {
 				"GitHub repository: org/repo",
 				"## Relevant context from memory",
 				"relevant fact",
-				"## Recent conversation history",
-				"user: question",
 			},
 		},
 	}
@@ -292,7 +273,7 @@ func TestBuildSystemPrompt(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildSystemPrompt(tc.cfg, tc.history, tc.memories)
+			got := buildSystemPrompt(tc.cfg, tc.memories)
 			for _, want := range tc.contains {
 				if want != "" && !containsStr(got, want) {
 					t.Errorf("prompt does not contain %q\nGot:\n%s", want, got)
