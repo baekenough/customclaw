@@ -15,7 +15,7 @@ WHERE platform_message_id IS NOT NULL;
 
 -- Step 3: Partial index for active messages (used by the view)
 CREATE INDEX IF NOT EXISTS idx_messages_active
-ON messages (bot_id, channel_id, created_at)
+ON messages (bot_id, channel_id, timestamp)
 WHERE deleted_at IS NULL;
 
 -- Step 4: Rename table and create updatable view
