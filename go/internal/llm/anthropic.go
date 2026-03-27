@@ -99,7 +99,7 @@ func (p *ClaudeProvider) Complete(ctx context.Context, req *Request) (*Response,
 	)
 
 	stream := p.client.Messages.NewStreaming(ctx, params)
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	var msg anthropic.Message
 	for stream.Next() {
