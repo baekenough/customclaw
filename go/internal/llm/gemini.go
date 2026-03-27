@@ -33,11 +33,21 @@ func resolveGeminiModel(alias string) string {
 // Authentication is handled via the GEMINI_API_KEY environment variable,
 // which is read during Complete (when the client is constructed per-call).
 // The SDK also accepts GOOGLE_API_KEY as a fallback.
-type GeminiProvider struct{}
+// When apiKey is non-empty it takes precedence over the environment variables.
+type GeminiProvider struct {
+	apiKey string // per-bot key override; empty means use env var
+}
 
-// NewGeminiProvider constructs a GeminiProvider.
+// NewGeminiProvider constructs a GeminiProvider that reads its API key from
+// the GEMINI_API_KEY (or GOOGLE_API_KEY) environment variable at call time.
 func NewGeminiProvider() *GeminiProvider {
 	return &GeminiProvider{}
+}
+
+// NewGeminiProviderWithKey constructs a GeminiProvider with an explicit API key.
+// Use this for per-bot key overrides; the key bypasses the env vars.
+func NewGeminiProviderWithKey(apiKey string) *GeminiProvider {
+	return &GeminiProvider{apiKey: apiKey}
 }
 
 // Name returns "gemini".
@@ -57,7 +67,10 @@ func (p *GeminiProvider) Complete(ctx context.Context, req *Request) (*Response,
 		)
 	}
 
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	apiKey := p.apiKey
+	if apiKey == "" {
+		apiKey = os.Getenv("GEMINI_API_KEY")
+	}
 	if apiKey == "" {
 		apiKey = os.Getenv("GOOGLE_API_KEY")
 	}

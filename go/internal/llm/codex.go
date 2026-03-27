@@ -50,6 +50,13 @@ func NewOpenAIProvider() *OpenAIProvider {
 	return &OpenAIProvider{client: &client}
 }
 
+// NewOpenAIProviderWithKey constructs an OpenAIProvider with an explicit API key.
+// Use this for per-bot key overrides; the key bypasses the OPENAI_API_KEY env var.
+func NewOpenAIProviderWithKey(apiKey string) *OpenAIProvider {
+	client := openai.NewClient(option.WithAPIKey(apiKey))
+	return &OpenAIProvider{client: &client}
+}
+
 // CodexProvider is a backwards-compatible alias for OpenAIProvider.
 // It exists so that existing references to NewCodexProvider continue to work.
 type CodexProvider = OpenAIProvider

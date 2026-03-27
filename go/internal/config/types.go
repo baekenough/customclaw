@@ -58,6 +58,14 @@ type DiscordConfig struct {
 	GuildID string `yaml:"guild_id" json:"guild_id"`
 }
 
+// LLMKeys holds per-bot LLM API keys loaded from the database.
+// Empty strings mean the bot uses the shared environment variable keys.
+type LLMKeys struct {
+	AnthropicKey string `yaml:"-" json:"-"`
+	OpenAIKey    string `yaml:"-" json:"-"`
+	GeminiKey    string `yaml:"-" json:"-"`
+}
+
 // BotConfig is the top-level configuration for a single bot instance.
 // It aggregates platform credentials, persona, and feature settings.
 type BotConfig struct {
@@ -77,6 +85,7 @@ type BotConfig struct {
 	Claude        ClaudeConfig     `yaml:"claude"          json:"claude"`
 	Memory        MemoryConfig     `yaml:"memory"          json:"memory"`
 	Security      SecurityConfig   `yaml:"security"        json:"security"`
+	LLMKeys       LLMKeys          `yaml:"-"               json:"-"` // per-bot API keys, never serialized
 }
 
 // defaults applies zero-value defaults that mirror the Python dataclass defaults.

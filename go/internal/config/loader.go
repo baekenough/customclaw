@@ -174,7 +174,8 @@ func LoadAllBotsFromDB(ctx context.Context, dsn string) ([]*BotConfig, error) {
 			id, name, slack_app_token, slack_bot_token,
 			channels, persona, project, airflow, tools,
 			claude, memory, security,
-			platform, discord, mattermost
+			platform, discord, mattermost,
+			anthropic_api_key, openai_api_key, gemini_api_key
 		FROM bots
 		WHERE is_active = true
 		ORDER BY created_at, id
@@ -207,6 +208,7 @@ func scanBotRow(rows pgx.Rows) (*BotConfig, error) {
 		security                     map[string]any
 		platform                     string
 		discord, mattermost          map[string]any
+		anthropicKey, openaiKey, geminiKey *string // nullable per-bot LLM keys
 	)
 
 	err := rows.Scan(
@@ -214,6 +216,7 @@ func scanBotRow(rows pgx.Rows) (*BotConfig, error) {
 		&channels, &persona, &project, &airflow, &tools,
 		&claude, &memory, &security,
 		&platform, &discord, &mattermost,
+		&anthropicKey, &openaiKey, &geminiKey,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan row: %w", err)
@@ -269,6 +272,17 @@ func scanBotRow(rows pgx.Rows) (*BotConfig, error) {
 			MentionOnly:     boolField(security, "mention_only", false),
 		},
 	}
+
+	if anthropicKey != nil {
+		cfg.LLMKeys.AnthropicKey = *anthropicKey
+	}
+	if openaiKey != nil {
+		cfg.LLMKeys.OpenAIKey = *openaiKey
+	}
+	if geminiKey != nil {
+		cfg.LLMKeys.GeminiKey = *geminiKey
+	}
+
 	return cfg, nil
 }
 

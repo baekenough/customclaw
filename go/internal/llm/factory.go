@@ -21,3 +21,23 @@ func NewProvider(name string) (Provider, error) {
 		return nil, fmt.Errorf("unknown provider: %q", name)
 	}
 }
+
+// NewProviderWithKey creates a Provider with an explicit API key.
+// If apiKey is empty, it delegates to NewProvider (environment variable based).
+//
+// Supported names follow the same rules as NewProvider.
+func NewProviderWithKey(name, apiKey string) (Provider, error) {
+	if apiKey == "" {
+		return NewProvider(name)
+	}
+	switch name {
+	case "claude", "anthropic", "":
+		return NewClaudeProviderWithKey(apiKey), nil
+	case "openai":
+		return NewOpenAIProviderWithKey(apiKey), nil
+	case "gemini":
+		return NewGeminiProviderWithKey(apiKey), nil
+	default:
+		return nil, fmt.Errorf("unknown provider: %q", name)
+	}
+}

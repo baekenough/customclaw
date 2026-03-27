@@ -6,6 +6,7 @@ import (
 	"log/slog"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
 // claudeModelAliases maps short friendly names to Anthropic Messages API model IDs.
@@ -41,6 +42,13 @@ type ClaudeProvider struct {
 // time beyond the environment variable being set at call time.
 func NewClaudeProvider() *ClaudeProvider {
 	client := anthropic.NewClient()
+	return &ClaudeProvider{client: client}
+}
+
+// NewClaudeProviderWithKey constructs a ClaudeProvider with an explicit API key.
+// Use this for per-bot key overrides; the key bypasses the ANTHROPIC_API_KEY env var.
+func NewClaudeProviderWithKey(apiKey string) *ClaudeProvider {
+	client := anthropic.NewClient(option.WithAPIKey(apiKey))
 	return &ClaudeProvider{client: client}
 }
 

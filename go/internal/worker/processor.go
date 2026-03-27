@@ -39,6 +39,7 @@ type Processor struct {
 	bots             map[string]*config.BotConfig
 	provider         llm.Provider
 	providers        map[string]llm.Provider // keyed by provider name ("claude", "openai", "gemini")
+	botProviders     sync.Map                // map[string]llm.Provider — cached per-bot providers keyed by "botID:providerName"
 	store            *memory.MessageStore
 	search           *memory.HybridSearch
 	registry         *tools.Registry
@@ -108,10 +109,16 @@ func NewProcessorWithProviders(
 
 // UpdateBot replaces the cached configuration for a single bot.
 // Called by the hot-reload subscriber.
+// It also invalidates any cached per-bot provider so it is recreated with
+// the new keys on the next call.
 func (p *Processor) UpdateBot(cfg *config.BotConfig) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.bots[cfg.ID] = cfg
+	// Invalidate per-bot provider cache for all known provider names.
+	for _, name := range []string{"claude", "anthropic", "openai", "gemini"} {
+		p.botProviders.Delete(cfg.ID + ":" + name)
+	}
 }
 
 // ProcessMessage is the core message handler. It builds the LLM prompt,
@@ -298,20 +305,52 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 	return responseText, nil
 }
 
-// selectProvider returns the Provider configured for the given bot. It falls
-// back to the default provider when the bot's preferred provider is not
-// registered in the map.
+// selectProvider returns the Provider configured for the given bot.
+//
+// Resolution order:
+//  1. Per-bot API key set in DB → cached per-bot provider (keyed by botID:providerName).
+//  2. Shared provider registry (p.providers) keyed by provider name.
+//  3. Default provider (p.provider).
 func (p *Processor) selectProvider(cfg *config.BotConfig) llm.Provider {
-	if len(p.providers) > 0 {
-		name := cfg.Claude.Provider
-		if name == "" {
-			name = "anthropic"
+	providerName := cfg.Claude.Provider
+	if providerName == "" {
+		providerName = "claude"
+	}
+
+	// Determine whether this bot has a per-bot API key for the chosen provider.
+	var botKey string
+	switch providerName {
+	case "claude", "anthropic":
+		botKey = cfg.LLMKeys.AnthropicKey
+	case "openai":
+		botKey = cfg.LLMKeys.OpenAIKey
+	case "gemini":
+		botKey = cfg.LLMKeys.GeminiKey
+	}
+
+	if botKey != "" {
+		cacheKey := cfg.ID + ":" + providerName
+		if cached, ok := p.botProviders.Load(cacheKey); ok {
+			return cached.(llm.Provider)
 		}
-		if prov, ok := p.providers[name]; ok {
+		prov, err := llm.NewProviderWithKey(providerName, botKey)
+		if err != nil {
+			slog.Warn("failed to create per-bot provider, falling back to shared",
+				"bot", cfg.ID, "provider", providerName, "error", err)
+		} else {
+			p.botProviders.Store(cacheKey, prov)
+			slog.Info("created per-bot provider", "bot", cfg.ID, "provider", providerName)
 			return prov
 		}
-		// Name not found — also try common aliases.
-		switch name {
+	}
+
+	// Fall back to the shared provider registry.
+	if len(p.providers) > 0 {
+		if prov, ok := p.providers[providerName]; ok {
+			return prov
+		}
+		// Also try common aliases.
+		switch providerName {
 		case "claude":
 			if prov, ok := p.providers["anthropic"]; ok {
 				return prov
