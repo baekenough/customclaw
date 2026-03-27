@@ -1,0 +1,32 @@
+go:
+  - changed-files:
+    - any-glob-to-any-file: 'go/**'
+
+python:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'dags/**'
+      - '*.py'
+
+docker:
+  - changed-files:
+    - any-glob-to-any-file:
+      - 'docker/**'
+      - '**/Dockerfile'
+      - '**/docker-compose*.yml'
+
+ci:
+  - changed-files:
+    - any-glob-to-any-file: '.github/**'
+
+agents:
+  - changed-files:
+    - any-glob-to-any-file: '.claude/agents/**'
+
+skills:
+  - changed-files:
+    - any-glob-to-any-file: '.claude/skills/**'
+
+rules:
+  - changed-files:
+    - any-glob-to-any-file: '.claude/rules/**'

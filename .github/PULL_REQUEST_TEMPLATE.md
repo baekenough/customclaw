@@ -8,6 +8,20 @@
 
 -
 
+## What did NOT change
+
+<!-- Explicitly state what this PR does NOT affect — helps reviewers scope their review -->
+
+-
+
+## Security Impact
+
+- [ ] No security impact
+- [ ] Auth/permissions changes — describe:
+- [ ] Secrets/credentials handling changes — describe:
+- [ ] Input validation changes — describe:
+- [ ] Network/API exposure changes — describe:
+
 ## Related Issues
 
 <!-- Link any related issues using "Fixes #123" or "Relates to #123" -->
