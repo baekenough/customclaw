@@ -117,14 +117,16 @@ func decodeStreamMessage(msg redis.XMessage) IncomingMessage {
 		return v
 	}
 	return IncomingMessage{
-		StreamID:  msg.ID,
-		BotID:     get("bot_id"),
-		ChannelID: get("channel_id"),
-		UserID:    get("user_id"),
-		ThreadID:  get("thread_ts"),  // Python adapters write "thread_ts" (not "thread_id")
-		MessageID: get("message_ts"), // Python adapters write "message_ts" (not "message_id")
-		Text:      get("text"),
-		Platform:  get("platform"),
-		BotToken:  get("bot_token"),
+		StreamID:      msg.ID,
+		BotID:         get("bot_id"),
+		ChannelID:     get("channel_id"),
+		UserID:        get("user_id"),
+		ThreadID:      get("thread_ts"),     // Python adapters write "thread_ts" (not "thread_id")
+		MessageID:     get("message_ts"),    // Python adapters write "message_ts" (not "message_id")
+		Text:          get("text"),
+		Platform:      get("platform"),
+		BotToken:      get("bot_token"),
+		EventType:     get("event_type"),          // "create" | "delete" | "edit"; empty == "create"
+		PlatformMsgID: get("platform_message_id"), // platform-native message ID for delete/edit
 	}
 }

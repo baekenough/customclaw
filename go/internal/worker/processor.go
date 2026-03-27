@@ -128,6 +128,14 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 		return "", fmt.Errorf("unknown bot: %s", msg.BotID)
 	}
 
+	// Handle non-create events (delete, edit) before normal processing.
+	if msg.EventType == "delete" {
+		return p.handleDeleteEvent(ctx, cfg, msg)
+	}
+	if msg.EventType == "edit" {
+		return p.handleEditEvent(ctx, cfg, msg)
+	}
+
 	slog.Info("processing message",
 		"bot", msg.BotID,
 		"channel", msg.ChannelID,
@@ -152,14 +160,15 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 
 	// Append user message to in-memory cache and persist to DB.
 	if err := p.store.Append(ctx, hKey, memory.Message{
-		Role:    "user",
-		Content: msg.Text,
+		Role:          "user",
+		Content:       msg.Text,
+		PlatformMsgID: msg.PlatformMsgID,
 	}); err != nil {
 		slog.Warn("failed to save user message", "key", hKey, "error", err)
 	}
 	// Persist to DB asynchronously — does not block the critical path.
 	go func() {
-		if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, msg.UserID, "user", msg.Text); err != nil {
+		if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, msg.UserID, "user", msg.Text, msg.PlatformMsgID); err != nil {
 			slog.Warn("failed to save user message to DB", "error", err)
 		}
 	}()
@@ -257,7 +266,7 @@ func (p *Processor) ProcessMessage(ctx context.Context, msg IncomingMessage, msg
 	}
 	// Persist to DB asynchronously — does not block the critical path.
 	go func() {
-		if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, "", "assistant", responseText); err != nil {
+		if err := p.store.SaveMessage(ctx, msg.BotID, msg.ChannelID, msg.ThreadID, "", "assistant", responseText, ""); err != nil {
 			slog.Warn("failed to save assistant message to DB", "error", err)
 		}
 	}()
@@ -441,6 +450,55 @@ func isDangerousTool(name string, dangerous []string) bool {
 		}
 	}
 	return false
+}
+
+// handleDeleteEvent processes a message deletion event.
+func (p *Processor) handleDeleteEvent(ctx context.Context, cfg *config.BotConfig, msg IncomingMessage) (string, error) {
+	_ = cfg // reserved for future per-bot delete policy
+	if msg.PlatformMsgID == "" {
+		slog.Warn("delete event: missing platform message ID", "bot", msg.BotID)
+		return "", nil
+	}
+
+	// Soft delete in DB.
+	if err := p.store.SoftDeleteMessage(ctx, msg.BotID, msg.PlatformMsgID); err != nil {
+		slog.Warn("delete event: db soft delete failed", "error", err)
+	}
+
+	// Remove from in-memory history cache.
+	hKey := historyKey(msg)
+	p.store.RemoveFromHistory(hKey, msg.PlatformMsgID)
+
+	// Cascade delete from OpenSearch (best-effort).
+	if p.search != nil {
+		if err := p.search.DeleteByPlatformMsgID(ctx, msg.BotID, msg.PlatformMsgID); err != nil {
+			slog.Warn("delete event: opensearch cascade failed", "error", err)
+		}
+	}
+
+	slog.Info("delete event processed", "bot", msg.BotID, "platform_msg_id", msg.PlatformMsgID)
+	return "", nil // No response to send for delete events.
+}
+
+// handleEditEvent processes a message edit event.
+func (p *Processor) handleEditEvent(ctx context.Context, cfg *config.BotConfig, msg IncomingMessage) (string, error) {
+	_ = cfg // reserved for future per-bot edit policy
+	if msg.PlatformMsgID == "" {
+		slog.Warn("edit event: missing platform message ID", "bot", msg.BotID)
+		return "", nil
+	}
+
+	// Update content in DB.
+	if err := p.store.UpdateMessageContent(ctx, msg.BotID, msg.PlatformMsgID, msg.Text); err != nil {
+		slog.Warn("edit event: db update failed", "error", err)
+	}
+
+	// Update in-memory history cache.
+	hKey := historyKey(msg)
+	p.store.UpdateInHistory(hKey, msg.PlatformMsgID, msg.Text)
+
+	slog.Info("edit event processed", "bot", msg.BotID, "platform_msg_id", msg.PlatformMsgID)
+	return "", nil // No response to send for edit events.
 }
 
 // historyKey derives the MessageStore key for a message.

@@ -161,6 +161,15 @@ func NewHybridSearch(store *MessageStore, opensearchURL string) *HybridSearch {
 // PostgreSQL fallback (mirrors Python's lookback=200 default).
 const recentMessagesLookback = 200
 
+// DeleteByPlatformMsgID deletes memories associated with a platform message.
+// Currently a no-op stub — requires a source_message_id foreign key in the
+// memories table to locate which memory rows to remove.
+func (h *HybridSearch) DeleteByPlatformMsgID(ctx context.Context, botID, platformMsgID string) error {
+	log.Printf("opensearch cascade: not yet implemented (requires memories.source_message_id) bot_id=%s platform_msg_id=%s",
+		botID, platformMsgID)
+	return nil
+}
+
 // Search returns up to topK memory entries relevant to queryText for the
 // given bot.  The algorithm mirrors the Python HybridSearch.search:
 //

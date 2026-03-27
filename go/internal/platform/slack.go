@@ -169,13 +169,31 @@ func (a *SlackAdapter) handleEventsAPI(ctx context.Context, evt socketmode.Event
 	a.handleMessage(ctx, msgEvent)
 }
 
-// handleMessage applies security checks and publishes a valid message event to
-// the Redis Stream.
+// handleMessage routes a Slack message event to the appropriate handler based
+// on its SubType, then publishes the result to the Redis Stream.
+//
+// Handled subtypes:
+//   - "" (no subtype): normal new message — event_type="create"
+//   - "message_deleted": message removed — event_type="delete"
+//   - "message_changed": message edited — event_type="edit"
+//
+// All other subtypes (e.g. "bot_message", "thread_broadcast") are silently
+// discarded to preserve backward-compatible behaviour.
 func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.MessageEvent) {
-	// Skip message subtypes (edits, deletions, thread broadcasts, etc.).
-	if ev.SubType != "" {
-		return
+	switch ev.SubType {
+	case "":
+		a.handleMessageCreate(ctx, ev)
+	case "message_deleted":
+		a.handleMessageDeleted(ctx, ev)
+	case "message_changed":
+		a.handleMessageChanged(ctx, ev)
+	default:
+		// Silently discard unhandled subtypes (bot_message, thread_broadcast, etc.)
 	}
+}
+
+// handleMessageCreate processes a normal new-message event (SubType == "").
+func (a *SlackAdapter) handleMessageCreate(ctx context.Context, ev *slackevents.MessageEvent) {
 	// Skip bot messages.
 	if ev.BotID != "" {
 		return
@@ -216,14 +234,16 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 	}
 
 	fields := map[string]any{
-		"bot_id":     cfg.ID,
-		"channel_id": ev.Channel,
-		"thread_ts":  threadTS,
-		"user_id":    ev.User,
-		"text":       ev.Text,
-		"message_ts": ev.TimeStamp,
-		"bot_token":  cfg.SlackBotToken,
-		"platform":   "slack",
+		"bot_id":              cfg.ID,
+		"channel_id":          ev.Channel,
+		"thread_ts":           threadTS,
+		"user_id":             ev.User,
+		"text":                ev.Text,
+		"message_ts":          ev.TimeStamp,
+		"bot_token":           cfg.SlackBotToken,
+		"platform":            "slack",
+		"event_type":          "create",
+		"platform_message_id": ev.TimeStamp,
 	}
 
 	if err := a.rdb.XAdd(ctx, &redis.XAddArgs{
@@ -233,6 +253,105 @@ func (a *SlackAdapter) handleMessage(ctx context.Context, ev *slackevents.Messag
 		slog.Error("failed to publish slack message to redis stream",
 			"channel", ev.Channel,
 			"ts", ev.TimeStamp,
+			"error", err,
+		)
+	}
+}
+
+// handleMessageDeleted processes a message_deleted subtype event.
+// The deleted message's ts is carried in ev.DeletedTimeStamp.
+func (a *SlackAdapter) handleMessageDeleted(ctx context.Context, ev *slackevents.MessageEvent) {
+	cfg := a.resolveConfig(ev.Channel)
+	if cfg == nil {
+		slog.Debug("slack message_deleted from unregistered channel, ignoring", "channel", ev.Channel)
+		return
+	}
+
+	deletedTS := ev.DeletedTimeStamp
+	if deletedTS == "" && ev.PreviousMessage != nil {
+		// Fallback: some Slack events carry the ts inside previous_message.
+		deletedTS = ev.PreviousMessage.Timestamp
+	}
+	if deletedTS == "" {
+		slog.Warn("slack message_deleted event has no deleted ts, ignoring", "channel", ev.Channel)
+		return
+	}
+
+	fields := map[string]any{
+		"bot_id":              cfg.ID,
+		"channel_id":          ev.Channel,
+		"thread_ts":           "",
+		"user_id":             "",
+		"text":                "",
+		"message_ts":          deletedTS,
+		"bot_token":           cfg.SlackBotToken,
+		"platform":            "slack",
+		"event_type":          "delete",
+		"platform_message_id": deletedTS,
+	}
+
+	if err := a.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: slackStreamKey,
+		Values: fields,
+	}).Err(); err != nil {
+		slog.Error("failed to publish slack message_deleted to redis stream",
+			"channel", ev.Channel,
+			"deleted_ts", deletedTS,
+			"error", err,
+		)
+	}
+}
+
+// handleMessageChanged processes a message_changed subtype event.
+// The edited message's ts and new text are in ev.Message.
+func (a *SlackAdapter) handleMessageChanged(ctx context.Context, ev *slackevents.MessageEvent) {
+	if ev.Message == nil {
+		slog.Warn("slack message_changed event has no message payload, ignoring", "channel", ev.Channel)
+		return
+	}
+
+	cfg := a.resolveConfig(ev.Channel)
+	if cfg == nil {
+		slog.Debug("slack message_changed from unregistered channel, ignoring", "channel", ev.Channel)
+		return
+	}
+
+	// Only process user edits; skip bot-initiated changes.
+	if ev.Message.BotID != "" {
+		return
+	}
+
+	editedTS := ev.Message.Timestamp
+	if editedTS == "" {
+		slog.Warn("slack message_changed event has no message ts, ignoring", "channel", ev.Channel)
+		return
+	}
+
+	threadTS := ev.Message.ThreadTimestamp
+	if threadTS == "" {
+		threadTS = editedTS
+	}
+
+	fields := map[string]any{
+		"bot_id":              cfg.ID,
+		"channel_id":          ev.Channel,
+		"thread_ts":           threadTS,
+		"user_id":             ev.Message.User,
+		"text":                ev.Message.Text,
+		"message_ts":          editedTS,
+		"bot_token":           cfg.SlackBotToken,
+		"platform":            "slack",
+		"event_type":          "edit",
+		"platform_message_id": editedTS,
+	}
+
+	if err := a.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: slackStreamKey,
+		Values: fields,
+	}).Err(); err != nil {
+		slog.Error("failed to publish slack message_changed to redis stream",
+			"channel", ev.Channel,
+			"ts", editedTS,
 			"error", err,
 		)
 	}

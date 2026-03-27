@@ -12,8 +12,9 @@ import (
 // IncomingMessage is the normalised form of a Redis Stream entry passed to the dispatcher.
 type IncomingMessage struct {
 	// StreamID is the Redis Stream entry ID (e.g. "1700000000000-0").
-	StreamID  string
-	BotID     string
+	StreamID string
+	BotID    string
+	// ChannelID is the platform channel identifier.
 	ChannelID string
 	UserID    string
 	ThreadID  string
@@ -21,6 +22,12 @@ type IncomingMessage struct {
 	Text      string
 	Platform  string
 	BotToken  string
+	// EventType indicates the message lifecycle event: "create" (default), "delete", or "edit".
+	// An empty string is treated as "create" for backwards compatibility.
+	EventType string
+	// PlatformMsgID is the platform-native message identifier used for delete and edit events.
+	// For Slack this is the message timestamp (ts); for Discord it is the snowflake ID.
+	PlatformMsgID string
 }
 
 // pendingItem accumulates messages for a single routing key during the merge window.
@@ -84,7 +91,23 @@ func routingKey(msg IncomingMessage) string {
 
 // Dispatch enqueues msg for processing, merging it with any pending messages
 // that share the same routing key within the merge window.
+//
+// Non-create events (delete, edit) bypass the merge window entirely and are
+// dispatched immediately. This prevents text corruption that would occur if a
+// delete (empty text) were merged with a pending create via strings.Join.
 func (d *Dispatcher) Dispatch(ctx context.Context, msg IncomingMessage) {
+	// Normalise empty EventType to "create" for backward compatibility.
+	if msg.EventType == "" {
+		msg.EventType = "create"
+	}
+
+	// Bypass merge window for delete and edit events: send directly to the
+	// per-key queue so they are processed in FIFO order without text merging.
+	if msg.EventType == "delete" || msg.EventType == "edit" {
+		d.dispatchImmediate(ctx, msg)
+		return
+	}
+
 	key := routingKey(msg)
 
 	d.mu.Lock()
@@ -133,6 +156,30 @@ func (d *Dispatcher) fire(ctx context.Context, key string) {
 	}
 
 	work := dispatchWork{msg: item.mergedMsg, msgIDs: item.msgIDs}
+	select {
+	case q <- work:
+	case <-ctx.Done():
+	}
+}
+
+// dispatchImmediate sends msg directly to the per-key queue, bypassing the
+// merge window. Used for delete and edit events that must not be merged with
+// create events.
+func (d *Dispatcher) dispatchImmediate(ctx context.Context, msg IncomingMessage) {
+	key := routingKey(msg)
+
+	d.mu.Lock()
+	q, exists := d.queues[key]
+	if !exists {
+		q = make(chan dispatchWork, 64)
+		d.queues[key] = q
+		d.mu.Unlock()
+		go d.runQueue(ctx, key, q)
+	} else {
+		d.mu.Unlock()
+	}
+
+	work := dispatchWork{msg: msg, msgIDs: []string{msg.StreamID}}
 	select {
 	case q <- work:
 	case <-ctx.Done():

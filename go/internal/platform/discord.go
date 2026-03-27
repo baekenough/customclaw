@@ -76,6 +76,8 @@ func NewDiscordAdapter(configs []*config.BotConfig, rdb *redis.Client) (*Discord
 	}
 
 	session.AddHandler(a.onMessageCreate)
+	session.AddHandler(a.onMessageDelete)
+	session.AddHandler(a.onMessageUpdate)
 
 	return a, nil
 }
@@ -186,14 +188,16 @@ func (a *DiscordAdapter) onMessageCreate(s *discordgo.Session, m *discordgo.Mess
 
 	ctx := context.Background()
 	fields := map[string]any{
-		"bot_id":     cfg.ID,
-		"channel_id": m.ChannelID,
-		"thread_ts":  threadTS,
-		"user_id":    m.Author.ID,
-		"text":       text,
-		"message_ts": m.ID,
-		"bot_token":  cfg.Discord.Token,
-		"platform":   "discord",
+		"bot_id":              cfg.ID,
+		"channel_id":          m.ChannelID,
+		"thread_ts":           threadTS,
+		"user_id":             m.Author.ID,
+		"text":                text,
+		"message_ts":          m.ID,
+		"bot_token":           cfg.Discord.Token,
+		"platform":            "discord",
+		"event_type":          "create",
+		"platform_message_id": m.ID,
 	}
 
 	if err := a.rdb.XAdd(ctx, &redis.XAddArgs{
@@ -201,6 +205,109 @@ func (a *DiscordAdapter) onMessageCreate(s *discordgo.Session, m *discordgo.Mess
 		Values: fields,
 	}).Err(); err != nil {
 		slog.Error("failed to publish discord message to redis stream",
+			"channel", m.ChannelID,
+			"message_id", m.ID,
+			"error", err,
+		)
+	}
+}
+
+// onMessageDelete is the discordgo handler invoked for every MessageDelete event.
+// It publishes a delete event to the Redis Stream so the worker can mark the
+// message as deleted in the database.
+func (a *DiscordAdapter) onMessageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
+	if m.Message == nil {
+		return
+	}
+
+	cfg := a.resolveConfig(m.ChannelID)
+	if cfg == nil {
+		slog.Debug("discord message_delete from unregistered channel, ignoring",
+			"channel", m.ChannelID,
+		)
+		return
+	}
+
+	ctx := context.Background()
+	fields := map[string]any{
+		"bot_id":              cfg.ID,
+		"channel_id":          m.ChannelID,
+		"thread_ts":           "",
+		"user_id":             "",
+		"text":                "",
+		"message_ts":          m.ID,
+		"bot_token":           cfg.Discord.Token,
+		"platform":            "discord",
+		"event_type":          "delete",
+		"platform_message_id": m.ID,
+	}
+
+	if err := a.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: discordStreamKey,
+		Values: fields,
+	}).Err(); err != nil {
+		slog.Error("failed to publish discord message_delete to redis stream",
+			"channel", m.ChannelID,
+			"message_id", m.ID,
+			"error", err,
+		)
+	}
+}
+
+// onMessageUpdate is the discordgo handler invoked for every MessageUpdate event.
+// It publishes an edit event to the Redis Stream only when the message content
+// has actually changed (EditedTimestamp is non-nil).
+func (a *DiscordAdapter) onMessageUpdate(s *discordgo.Session, m *discordgo.MessageUpdate) {
+	if m.Message == nil {
+		return
+	}
+	// Only process genuine user edits; Discord sends MessageUpdate for other
+	// reasons (e.g. link-preview embeds). EditedTimestamp is non-nil only for
+	// content edits.
+	if m.EditedTimestamp == nil {
+		return
+	}
+	// Skip updates from bots.
+	if m.Author != nil && m.Author.Bot {
+		return
+	}
+
+	cfg := a.resolveConfig(m.ChannelID)
+	if cfg == nil {
+		slog.Debug("discord message_update from unregistered channel, ignoring",
+			"channel", m.ChannelID,
+		)
+		return
+	}
+
+	// Strip bot mention and trim whitespace from the updated content.
+	text := strings.ReplaceAll(m.Content, "<@"+s.State.User.ID+">", "")
+	text = strings.TrimSpace(text)
+
+	userID := ""
+	if m.Author != nil {
+		userID = m.Author.ID
+	}
+
+	ctx := context.Background()
+	fields := map[string]any{
+		"bot_id":              cfg.ID,
+		"channel_id":          m.ChannelID,
+		"thread_ts":           "",
+		"user_id":             userID,
+		"text":                text,
+		"message_ts":          m.ID,
+		"bot_token":           cfg.Discord.Token,
+		"platform":            "discord",
+		"event_type":          "edit",
+		"platform_message_id": m.ID,
+	}
+
+	if err := a.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: discordStreamKey,
+		Values: fields,
+	}).Err(); err != nil {
+		slog.Error("failed to publish discord message_update to redis stream",
 			"channel", m.ChannelID,
 			"message_id", m.ID,
 			"error", err,

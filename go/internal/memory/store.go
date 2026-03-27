@@ -48,9 +48,10 @@ type prefCacheEntry struct {
 
 // Message is a single entry in the conversation history.
 type Message struct {
-	Role      string // "user" or "assistant"
-	Content   string
-	Timestamp string // ISO 8601; empty for in-memory messages
+	Role          string // "user" or "assistant"
+	Content       string
+	Timestamp     string // ISO 8601; empty for in-memory messages
+	PlatformMsgID string // Platform-specific message ID (Slack ts, Discord snowflake)
 }
 
 // maxInMemoryKeys is the maximum number of distinct history keys kept in the
@@ -122,20 +123,98 @@ func (s *MessageStore) Pool() *pgxpool.Pool {
 // ---------------------------------------------------------------------------
 
 // SaveMessage inserts a single message row.
+// platformMsgID is the platform-native identifier (e.g. Slack ts, Discord snowflake).
+// Pass an empty string when the platform message ID is not yet available.
 func (s *MessageStore) SaveMessage(
 	ctx context.Context,
-	botID, channelID, threadTS, userID, role, content string,
+	botID, channelID, threadTS, userID, role, content, platformMsgID string,
 ) error {
 	if s.pool == nil {
 		return nil
 	}
 	const q = `
-		INSERT INTO messages (bot_id, channel_id, thread_ts, user_id, role, content)
-		VALUES ($1, $2, $3, $4, $5, $6)`
-	if _, err := s.pool.Exec(ctx, q, botID, channelID, threadTS, userID, role, content); err != nil {
+		INSERT INTO messages (bot_id, channel_id, thread_ts, user_id, role, content, platform_message_id)
+		VALUES ($1, $2, $3, $4, $5, $6, NULLIF($7, ''))`
+	if _, err := s.pool.Exec(ctx, q, botID, channelID, threadTS, userID, role, content, platformMsgID); err != nil {
 		return err
 	}
 	return nil
+}
+
+// SoftDeleteMessage marks a message as deleted by setting deleted_at.
+// It looks up the message by platform_message_id and bot_id.
+// A debug log is emitted when no matching active message is found; this is
+// not treated as an error because the message may have already been deleted.
+func (s *MessageStore) SoftDeleteMessage(ctx context.Context, botID, platformMsgID string) error {
+	if s.pool == nil {
+		return nil
+	}
+	const q = `UPDATE messages_data SET deleted_at = NOW() WHERE bot_id = $1 AND platform_message_id = $2 AND deleted_at IS NULL`
+	tag, err := s.pool.Exec(ctx, q, botID, platformMsgID)
+	if err != nil {
+		return fmt.Errorf("soft delete message: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		slog.Debug("soft delete: no matching message found", "bot_id", botID, "platform_msg_id", platformMsgID)
+	}
+	return nil
+}
+
+// UpdateMessageContent updates the content of a message and records the edit.
+// The original content is preserved in original_content on the first edit only
+// (COALESCE ensures it is not overwritten on subsequent edits).
+func (s *MessageStore) UpdateMessageContent(ctx context.Context, botID, platformMsgID, newContent string) error {
+	if s.pool == nil {
+		return nil
+	}
+	const q = `UPDATE messages_data
+		SET content = $3,
+		    edited_at = NOW(),
+		    original_content = COALESCE(original_content, content)
+		WHERE bot_id = $1 AND platform_message_id = $2 AND deleted_at IS NULL`
+	tag, err := s.pool.Exec(ctx, q, botID, platformMsgID, newContent)
+	if err != nil {
+		return fmt.Errorf("update message content: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		slog.Debug("update content: no matching message found", "bot_id", botID, "platform_msg_id", platformMsgID)
+	}
+	return nil
+}
+
+// RemoveFromHistory removes messages with the given platform message ID from
+// the in-memory cache. This is the cache-side counterpart of SoftDeleteMessage.
+func (s *MessageStore) RemoveFromHistory(key, platformMsgID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msgs, ok := s.history[key]
+	if !ok {
+		return
+	}
+	filtered := make([]Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.PlatformMsgID != platformMsgID {
+			filtered = append(filtered, m)
+		}
+	}
+	s.history[key] = filtered
+}
+
+// UpdateInHistory updates the content of messages with the given platform
+// message ID in the in-memory cache. This is the cache-side counterpart of
+// UpdateMessageContent.
+func (s *MessageStore) UpdateInHistory(key, platformMsgID, newContent string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	msgs, ok := s.history[key]
+	if !ok {
+		return
+	}
+	for i := range msgs {
+		if msgs[i].PlatformMsgID == platformMsgID {
+			msgs[i].Content = newContent
+		}
+	}
 }
 
 // GetThreadMessages returns up to limit messages for the given thread,
