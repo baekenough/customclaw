@@ -140,16 +140,17 @@ func decodeAnalysisMessage(msg redis.XMessage) AnalysisRequest {
 		return v
 	}
 	return AnalysisRequest{
-		Type:        get("type"),
-		IssueNumber: get("issue_number"),
-		PRNumber:    get("pr_number"),
-		Repo:        get("repo"),
-		RepoPath:    get("repo_path"),
-		IssueTitle:  get("issue_title"),
-		IssueBody:   get("issue_body"),
-		IssueLabels: get("issue_labels"),
-		PRTitle:     get("pr_title"),
-		PRBody:      get("pr_body"),
+		Type:         get("type"),
+		IssueNumber:  get("issue_number"),
+		PRNumber:     get("pr_number"),
+		Repo:         get("repo"),
+		RepoPath:     get("repo_path"),
+		IssueTitle:   get("issue_title"),
+		IssueBody:    get("issue_body"),
+		IssueLabels:  get("issue_labels"),
+		PRTitle:      get("pr_title"),
+		PRBody:       get("pr_body"),
+		SlackChannel: get("slack_channel"),
 	}
 }
 

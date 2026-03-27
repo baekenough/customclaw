@@ -13,16 +13,17 @@ import (
 
 // AnalysisRequest is a decoded Redis Stream message for the analysis pipeline.
 type AnalysisRequest struct {
-	Type        string // "issue_analysis" or "pr_analysis"
-	IssueNumber string
-	PRNumber    string
-	Repo        string
-	RepoPath    string
-	IssueTitle  string
-	IssueBody   string
-	IssueLabels string
-	PRTitle     string
-	PRBody      string
+	Type         string // "issue_analysis" or "pr_analysis"
+	IssueNumber  string
+	PRNumber     string
+	Repo         string
+	RepoPath     string
+	IssueTitle   string
+	IssueBody    string
+	IssueLabels  string
+	PRTitle      string
+	PRBody       string
+	SlackChannel string // per-repo channel override; empty = use default from DB
 }
 
 // processAnalysis runs the 3-role issue analysis pipeline:
@@ -158,7 +159,7 @@ func processAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Prov
 			}
 			notifySlack(ctx,
 				fmt.Sprintf("🎓 이슈 #%s 교수 종합 분석 완료", issueNumber),
-				issueNumber, repo, "", "microscope",
+				issueNumber, repo, "", "microscope", req.SlackChannel,
 			)
 		} else {
 			slog.Warn("analysis: professor returned no output", "issue", issueNumber)
@@ -190,7 +191,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 
 	startTS := notifySlack(ctx,
 		fmt.Sprintf("🔍 PR #%s 정합성 분석 시작", prNumber),
-		prNumber, repo, "", "",
+		prNumber, repo, "", "", req.SlackChannel,
 	)
 
 	// Step 1: Find linked issue and fetch its analysis.
@@ -314,7 +315,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 	// Notify Slack mid-way.
 	notifySlack(ctx,
 		fmt.Sprintf("📝 PR #%s Architect + Colleague 분석 완료, Professor 종합 중...", prNumber),
-		prNumber, repo, startTS, "",
+		prNumber, repo, startTS, "", req.SlackChannel,
 	)
 
 	// Step 5: Professor PR synthesis.
@@ -343,7 +344,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 			}
 			notifySlack(ctx,
 				fmt.Sprintf("🎓 PR #%s 교수 종합 분석 완료", prNumber),
-				prNumber, repo, startTS, "white_check_mark",
+				prNumber, repo, startTS, "white_check_mark", req.SlackChannel,
 			)
 		} else {
 			slog.Warn("analysis: PR professor returned no output", "pr", prNumber)

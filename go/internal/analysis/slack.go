@@ -74,13 +74,18 @@ func envBotInfo() botInfo {
 
 // notifySlack sends a Slack notification. It is best-effort: errors are logged
 // but not returned. Returns the thread_ts of the posted message, or "".
-func notifySlack(ctx context.Context, text, issueNumber, repo, threadTS, emoji string) string {
+// channelOverride, when non-empty, overrides the channel loaded from the database.
+func notifySlack(ctx context.Context, text, issueNumber, repo, threadTS, emoji, channelOverride string) string {
 	botInfoOnce.Do(func() {
 		cachedBotInfo = loadBotInfo(ctx)
 	})
 
 	info := cachedBotInfo
-	if info.token == "" || info.channel == "" {
+	channel := info.channel
+	if channelOverride != "" {
+		channel = channelOverride
+	}
+	if info.token == "" || channel == "" {
 		slog.Warn("slack: token/channel unavailable, skipping notification")
 		return ""
 	}
@@ -103,7 +108,7 @@ func notifySlack(ctx context.Context, text, issueNumber, repo, threadTS, emoji s
 		opts = append(opts, slack.MsgOptionTS(threadTS))
 	}
 
-	_, ts, err := client.PostMessageContext(ctx, info.channel, opts...)
+	_, ts, err := client.PostMessageContext(ctx, channel, opts...)
 	if err != nil {
 		slog.Warn("slack: post message failed (non-blocking)", "error", err)
 		return ""
@@ -116,7 +121,7 @@ func notifySlack(ctx context.Context, text, issueNumber, repo, threadTS, emoji s
 			reactionTS = ts
 		}
 		if reactErr := client.AddReactionContext(ctx, emoji,
-			slack.ItemRef{Channel: info.channel, Timestamp: reactionTS},
+			slack.ItemRef{Channel: channel, Timestamp: reactionTS},
 		); reactErr != nil {
 			slog.Debug("slack: add reaction failed (non-blocking)", "error", reactErr)
 		}

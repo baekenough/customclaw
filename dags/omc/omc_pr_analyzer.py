@@ -34,6 +34,13 @@ GITHUB_API_PULLS_URL = "https://api.github.com/repos/{repo}/pulls"
 DEFAULT_REQUEST_TIMEOUT = 30
 TARGET_REPO = "baekenough/oh-my-customcode"
 
+# Repo → Slack channel mapping for analysis notifications.
+# When empty or missing, the Go worker falls back to the DB-configured default.
+REPO_SLACK_CHANNELS = {
+    "baekenough/customclaw": "C0ANBQF9K36",
+    "baekenough/oh-my-customcode": "C0AM684CLRH",
+}
+
 # PR size thresholds for scope determination
 SMALL_PR_MAX_FILES = 5
 SMALL_PR_MAX_LINES = 100
@@ -287,6 +294,7 @@ def omc_pr_analyzer() -> None:
             "repo": "baekenough/oh-my-customcode",
             "repo_path": "/home/baekenough/workspace/oh-my-customcode",
             "analysis_scope": analysis_config.get("scope", "standard"),
+            "slack_channel": REPO_SLACK_CHANNELS.get("baekenough/oh-my-customcode", ""),
             "requested_at": datetime.now(timezone.utc).isoformat(),
         }
 
