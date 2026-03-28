@@ -40,13 +40,6 @@ LABEL_DEPTH_MAP = {
 }
 DEFAULT_MAX_TURNS = 10
 
-# Repo → Slack channel mapping for analysis notifications.
-# When empty or missing, the Go worker falls back to the DB-configured default.
-REPO_SLACK_CHANNELS = {
-    "baekenough/customclaw": "C0ANBQF9K36",
-    "baekenough/oh-my-customcode": "C0AM684CLRH",
-}
-
 
 # ---------------------------------------------------------------------------
 # Module-level pure helper functions
@@ -222,7 +215,6 @@ def omc_issue_analyzer() -> None:
             "repo": repo,
             "repo_path": f"/home/baekenough/workspace/{repo_name}",
             "analysis_depth": analysis_config.get("depth", "standard"),
-            "slack_channel": REPO_SLACK_CHANNELS.get(repo, ""),
             "requested_at": datetime.now(timezone.utc).isoformat(),
         }
 
