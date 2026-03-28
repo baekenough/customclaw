@@ -99,6 +99,10 @@ func (p *ClaudeCLIProvider) Complete(ctx context.Context, req *Request) (*Respon
 		cmd.Stdin = strings.NewReader(stdinPayload)
 	}
 
+	// Remove ANTHROPIC_API_KEY from CLI environment so it uses OAuth credentials
+	// instead of the rate-limited API key.
+	cmd.Env = filterEnv("ANTHROPIC_API_KEY")
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -122,4 +126,20 @@ func (p *ClaudeCLIProvider) Complete(ctx context.Context, req *Request) (*Respon
 
 	// Usage is not reported by the CLI binary; callers must handle nil Usage.
 	return &Response{Text: text, Usage: nil}, nil
+}
+
+// filterEnv returns os.Environ() with the named keys removed.
+func filterEnv(removeKeys ...string) []string {
+	remove := make(map[string]bool, len(removeKeys))
+	for _, k := range removeKeys {
+		remove[k] = true
+	}
+	var env []string
+	for _, e := range os.Environ() {
+		key, _, _ := strings.Cut(e, "=")
+		if !remove[key] {
+			env = append(env, e)
+		}
+	}
+	return env
 }
