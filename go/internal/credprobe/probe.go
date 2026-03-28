@@ -203,7 +203,7 @@ func checkGemini(ctx context.Context) checkResult {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return checkResult{"ok", "", ""}
-	case http.StatusBadRequest, http.StatusForbidden:
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
 		msg := extractErrorMessage(resp.Body)
 		if msg == "" {
 			msg = fmt.Sprintf("API returned %d", resp.StatusCode)

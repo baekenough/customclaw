@@ -327,13 +327,23 @@ def _process_analysis(request: dict) -> None:
     with ThreadPoolExecutor(max_workers=2) as inner_pool:
         architect_future = inner_pool.submit(
             _run_analysis,
-            issue_number, issue_title, issue_body,
-            issue_labels, "architect", repo_path, rag_section,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            issue_labels=issue_labels,
+            analysis_type="architect",
+            repo_path=repo_path,
+            extra_context=rag_section,
         )
         colleague_future = inner_pool.submit(
             _run_analysis,
-            issue_number, issue_title, issue_body,
-            issue_labels, "colleague", repo_path, rag_section,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            issue_labels=issue_labels,
+            analysis_type="colleague",
+            repo_path=repo_path,
+            extra_context=rag_section,
         )
         architect_result = architect_future.result()
         colleague_result = colleague_future.result()
@@ -607,6 +617,10 @@ def _run_analysis(
         cwd = repo_path if os.path.isdir(repo_path) else "/tmp"
 
         # Checkout the correct base branch before analysis to avoid stale code issues
+        # Sanitize base_branch: strip whitespace, fall back to "main" if empty
+        base_branch = base_branch.strip() if base_branch else "main"
+        if not base_branch:
+            base_branch = "main"
         try:
             subprocess.run(
                 ["git", "-C", cwd, "fetch", "origin", base_branch],
@@ -619,7 +633,12 @@ def _run_analysis(
                 timeout=30,
             )
         except Exception:
-            pass  # Best-effort checkout, don't block analysis
+            log.warning(
+                "Best-effort git checkout failed for #%s (base=%s), "
+                "continuing with current working tree",
+                issue_number,
+                base_branch,
+            )
 
         env = {
             **os.environ,
@@ -876,13 +895,25 @@ def _process_pr_analysis(request: dict) -> None:
     with ThreadPoolExecutor(max_workers=2) as inner_pool:
         architect_future = inner_pool.submit(
             _run_analysis,
-            pr_number, pr_title, pr_body,
-            repo, "pr_architect", repo_path, combined_context, pr_base,
+            issue_number=pr_number,
+            issue_title=pr_title,
+            issue_body=pr_body,
+            issue_labels=repo,
+            analysis_type="pr_architect",
+            repo_path=repo_path,
+            extra_context=combined_context,
+            base_branch=pr_base,
         )
         colleague_future = inner_pool.submit(
             _run_analysis,
-            pr_number, pr_title, pr_body,
-            repo, "pr_colleague", repo_path, combined_context, pr_base,
+            issue_number=pr_number,
+            issue_title=pr_title,
+            issue_body=pr_body,
+            issue_labels=repo,
+            analysis_type="pr_colleague",
+            repo_path=repo_path,
+            extra_context=combined_context,
+            base_branch=pr_base,
         )
         architect_result = architect_future.result()
         colleague_result = colleague_future.result()
