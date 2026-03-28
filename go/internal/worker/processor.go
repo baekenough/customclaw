@@ -499,6 +499,15 @@ func (p *Processor) handleDeleteEvent(ctx context.Context, cfg *config.BotConfig
 		return "", nil
 	}
 
+	// Cascade delete associated memories BEFORE soft-deleting the message.
+	// GetMessageIDByPlatformID queries WHERE deleted_at IS NULL, so the
+	// message must still be active for the UUID lookup to succeed.
+	if p.search != nil {
+		if err := p.search.DeleteByPlatformMsgID(ctx, msg.BotID, msg.PlatformMsgID); err != nil {
+			slog.Warn("delete event: memory cascade failed", "error", err)
+		}
+	}
+
 	// Soft delete in DB.
 	if err := p.store.SoftDeleteMessage(ctx, msg.BotID, msg.PlatformMsgID); err != nil {
 		slog.Warn("delete event: db soft delete failed", "error", err)
@@ -507,13 +516,6 @@ func (p *Processor) handleDeleteEvent(ctx context.Context, cfg *config.BotConfig
 	// Remove from in-memory history cache.
 	hKey := historyKey(msg)
 	p.store.RemoveFromHistory(hKey, msg.PlatformMsgID)
-
-	// Cascade delete from OpenSearch (best-effort).
-	if p.search != nil {
-		if err := p.search.DeleteByPlatformMsgID(ctx, msg.BotID, msg.PlatformMsgID); err != nil {
-			slog.Warn("delete event: opensearch cascade failed", "error", err)
-		}
-	}
 
 	slog.Info("delete event processed", "bot", msg.BotID, "platform_msg_id", msg.PlatformMsgID)
 	return "", nil // No response to send for delete events.
