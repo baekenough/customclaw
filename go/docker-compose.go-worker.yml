@@ -30,7 +30,9 @@ services:
       # Claude credentials directory: rw required for OAuth token refresh
       - ${CLAUDE_CONFIG_DIR:-/home/baekenough/.claude}:/home/appuser/.claude:rw
       # Target repos for FullAgent analysis (read-only for security)
-      - /home/baekenough/workspace:/workspace:ro
+      - /home/baekenough/workspace:/home/baekenough/workspace:ro
+      # Claude CLI configuration file: rw for config updates
+      - /home/baekenough/.claude.json:/home/appuser/.claude.json:rw
     entrypoint: ["worker"]
 
   go-app:
