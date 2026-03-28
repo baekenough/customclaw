@@ -110,7 +110,7 @@ func run() error {
 	}
 
 	opensearchURL := os.Getenv("OPENSEARCH_URL")
-	search := memory.NewHybridSearch(store, opensearchURL)
+	search := memory.NewHybridSearch(store, opensearchURL, rdb)
 
 	var osClient *memory.OpenSearchClient
 	if opensearchURL != "" {

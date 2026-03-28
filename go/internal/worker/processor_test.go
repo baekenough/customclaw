@@ -67,7 +67,7 @@ func TestProcessMessageEndToEnd(t *testing.T) {
 		bots,
 		provider,
 		store,
-		memory.NewHybridSearch(store, ""), // no OpenSearch
+		memory.NewHybridSearch(store, "", nil), // no OpenSearch, no Redis cache
 		nil,                               // no tool registry
 		nil,                               // no memory extractor
 		nil,                               // no usage logger

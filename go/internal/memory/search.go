@@ -5,7 +5,10 @@ package memory
 import (
 	"context"
 	"log"
+	"log/slog"
 	"strings"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // SearchResult is a single memory match returned by HybridSearch.
@@ -142,6 +145,7 @@ type HybridSearch struct {
 	osClient *OpenSearchClient // nil if OpenSearch is unavailable
 	store    *MessageStore
 	embedder *EmbeddingClient // nil when OpenAI unavailable; BM25-only fallback
+	cache    *SearchCache     // multi-tier search result cache; never nil
 }
 
 // NewHybridSearch creates a HybridSearch. It attempts to connect to OpenSearch
@@ -149,10 +153,14 @@ type HybridSearch struct {
 // If opensearchURL is empty, the OPENSEARCH_URL env var is consulted
 // (default "http://opensearch:9200"). An EmbeddingClient is created from
 // OPENAI_API_KEY; if the key is absent, hybrid search falls back to BM25.
-func NewHybridSearch(store *MessageStore, opensearchURL string) *HybridSearch {
+//
+// rdb may be nil to disable the L2 semantic cache (L1 in-memory cache is
+// always active regardless).
+func NewHybridSearch(store *MessageStore, opensearchURL string, rdb *redis.Client) *HybridSearch {
 	h := &HybridSearch{
 		store:    store,
 		embedder: NewEmbeddingClient(),
+		cache:    NewSearchCache(rdb),
 	}
 	client, err := NewOpenSearchClient(opensearchURL)
 	if err != nil {
@@ -179,12 +187,40 @@ func (h *HybridSearch) DeleteByPlatformMsgID(ctx context.Context, botID, platfor
 // Search returns up to topK memory entries relevant to queryText for the
 // given bot.  The algorithm mirrors the Python HybridSearch.search:
 //
-//  1. Short action query → PostgreSQL memories + recent messages with boosted scores.
-//  2. OpenSearch available → search each expanded query variant.
-//  3. Fallback → PostgreSQL keyword search.
-//  4. Still short → recent message search to cover extraction lag.
-//  5. Sort by score descending, return top topK.
+//  1. L1 exact-match cache check (in-memory, 5 min TTL).
+//  2. Embed query early so the vector is available for L2 and OpenSearch.
+//  3. L2 semantic cache check (Redis cosine similarity ≥ 0.95, 15 min TTL).
+//  4. Short action query → PostgreSQL memories + recent messages with boosted scores.
+//  5. OpenSearch available → search each expanded query variant.
+//  6. Fallback → PostgreSQL keyword search.
+//  7. Still short → recent message search to cover extraction lag.
+//  8. Sort by score descending, cache and return top topK.
 func (h *HybridSearch) Search(ctx context.Context, botID, channelID, queryText string, topK int) ([]SearchResult, error) {
+	// --- L1: exact-match cache ---
+	if cached, ok := h.cache.GetL1(botID, queryText); ok {
+		slog.Debug("search cache L1 hit", "bot", botID)
+		return cached, nil
+	}
+
+	// --- Embed early: needed for L2 check and OpenSearch hybrid path ---
+	// The embedding is computed once and reused across both cache tiers and
+	// the OpenSearch kNN query.
+	var queryVector []float32
+	if h.embedder != nil {
+		vec, err := h.embedder.Embed(ctx, queryText)
+		if err != nil {
+			log.Printf("embedding failed, falling back to BM25: %v", err)
+		} else {
+			queryVector = vec
+		}
+	}
+
+	// --- L2: semantic cache ---
+	if cached, ok := h.cache.GetL2(ctx, botID, queryVector); ok {
+		slog.Debug("search cache L2 hit", "bot", botID)
+		return cached, nil
+	}
+
 	var results []SearchResult
 	seen := make(map[[2]string]bool) // dedup by [category, content]
 
@@ -234,24 +270,15 @@ func (h *HybridSearch) Search(ctx context.Context, botID, channelID, queryText s
 			minNeeded = 3
 		}
 		if len(results) >= minNeeded {
-			return truncate(results, topK), nil
+			final := truncate(results, topK)
+			h.cache.PutL1(botID, queryText, final)
+			h.cache.PutL2(ctx, botID, queryVector, final)
+			return final, nil
 		}
 	}
 
 	// --- Step 2: OpenSearch hybrid search (BM25 + kNN when embedder available) ---
 	if h.osClient != nil {
-		// Attempt to embed the original query text for vector similarity.
-		// Use the first (most representative) query variant for embedding.
-		var queryVector []float32
-		if h.embedder != nil {
-			vec, err := h.embedder.Embed(ctx, queryText)
-			if err != nil {
-				log.Printf("embedding failed, falling back to BM25: %v", err)
-			} else {
-				queryVector = vec
-			}
-		}
-
 		if queryVector != nil {
 			// Hybrid search: single call combines BM25 + kNN ranking.
 			hits, err := h.osClient.HybridSearchOS(ctx, botID, queries[0], queryVector, topK)
@@ -346,7 +373,10 @@ func (h *HybridSearch) Search(ctx context.Context, botID, channelID, queryText s
 	}
 
 	sortByScore(results)
-	return truncate(results, topK), nil
+	final := truncate(results, topK)
+	h.cache.PutL1(botID, queryText, final)
+	h.cache.PutL2(ctx, botID, queryVector, final)
+	return final, nil
 }
 
 // sortByScore sorts results descending by Score in place using insertion sort,
