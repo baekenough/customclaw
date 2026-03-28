@@ -4,6 +4,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"log/slog"
 	"strings"
@@ -175,12 +176,61 @@ func NewHybridSearch(store *MessageStore, opensearchURL string, rdb *redis.Clien
 // PostgreSQL fallback (mirrors Python's lookback=200 default).
 const recentMessagesLookback = 200
 
-// DeleteByPlatformMsgID deletes memories associated with a platform message.
-// Currently a no-op stub — requires a source_message_id foreign key in the
-// memories table to locate which memory rows to remove.
+// DeleteByPlatformMsgID cascades a message deletion to associated memories.
+// It looks up the message's internal UUID, finds linked memories via
+// source_message_id, removes them from OpenSearch and PostgreSQL, and
+// invalidates the search cache for the bot.
 func (h *HybridSearch) DeleteByPlatformMsgID(ctx context.Context, botID, platformMsgID string) error {
-	log.Printf("opensearch cascade: not yet implemented (requires memories.source_message_id) bot_id=%s platform_msg_id=%s",
-		botID, platformMsgID)
+	// Step 1: Resolve platform message ID → internal UUID.
+	msgID, err := h.store.GetMessageIDByPlatformID(ctx, botID, platformMsgID)
+	if err != nil {
+		return fmt.Errorf("delete cascade: resolve message: %w", err)
+	}
+	if msgID == "" {
+		slog.Debug("delete cascade: no message found", "bot", botID, "platform_msg_id", platformMsgID)
+		return nil
+	}
+
+	// Step 2: Find memories linked to this message.
+	memoryIDs, err := h.store.FindMemoriesBySourceMessage(ctx, botID, msgID)
+	if err != nil {
+		return fmt.Errorf("delete cascade: find memories: %w", err)
+	}
+	if len(memoryIDs) == 0 {
+		slog.Debug("delete cascade: no linked memories", "bot", botID, "msg_id", msgID)
+		return nil
+	}
+
+	// Step 3: Delete each memory from OpenSearch and PostgreSQL.
+	var errs []error
+	for _, memID := range memoryIDs {
+		if h.osClient != nil {
+			if osErr := h.osClient.Delete(ctx, memID); osErr != nil {
+				slog.Warn("delete cascade: opensearch delete failed", "memory_id", memID, "error", osErr)
+				errs = append(errs, osErr)
+			}
+		}
+		if pgErr := h.store.DeleteMemory(ctx, memID); pgErr != nil {
+			slog.Warn("delete cascade: pg delete failed", "memory_id", memID, "error", pgErr)
+			errs = append(errs, pgErr)
+		}
+	}
+
+	// Step 4: Invalidate search cache for this bot.
+	if h.cache != nil {
+		h.cache.InvalidateBot(ctx, botID)
+	}
+
+	slog.Info("delete cascade completed",
+		"bot", botID,
+		"platform_msg_id", platformMsgID,
+		"memories_deleted", len(memoryIDs),
+		"errors", len(errs),
+	)
+
+	if len(errs) > 0 {
+		return fmt.Errorf("delete cascade: %d/%d operations failed", len(errs), len(memoryIDs)*2)
+	}
 	return nil
 }
 

@@ -303,6 +303,196 @@ func indexStr(s, sub string) int {
 }
 
 // ---------------------------------------------------------------------------
+// handleEditEvent via ProcessMessage
+// ---------------------------------------------------------------------------
+
+func TestHandleEditEvent_invalidatesMemories(t *testing.T) {
+	t.Parallel()
+
+	store, err := memory.NewMessageStore(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewMessageStore: %v", err)
+	}
+
+	bots := map[string]*config.BotConfig{
+		"bot1": {
+			ID: "bot1",
+			Persona: config.PersonaConfig{Personality: "Test"},
+			Memory:  config.MemoryConfig{ContextWindow: 10},
+		},
+	}
+
+	proc := NewProcessor(
+		bots,
+		&mockProvider{response: "ok"},
+		store,
+		memory.NewHybridSearch(store, "", nil),
+		nil, nil, nil,
+		func(plt, _, token string) platform.ResponsePublisher {
+			return &mockPublisher{}
+		},
+	)
+
+	msg := IncomingMessage{
+		BotID:         "bot1",
+		ChannelID:     "ch1",
+		UserID:        "user1",
+		Text:          "edited text",
+		PlatformMsgID: "slack-ts-123",
+		EventType:     "edit",
+	}
+
+	// Act — process the edit event.
+	got, err := proc.ProcessMessage(context.Background(), msg, nil)
+	if err != nil {
+		t.Fatalf("ProcessMessage edit: %v", err)
+	}
+
+	// Edit events return empty string (no response is sent).
+	if got != "" {
+		t.Errorf("ProcessMessage edit: got %q, want empty string", got)
+	}
+}
+
+func TestHandleDeleteEvent_noResponse(t *testing.T) {
+	t.Parallel()
+
+	store, err := memory.NewMessageStore(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewMessageStore: %v", err)
+	}
+
+	bots := map[string]*config.BotConfig{
+		"bot1": {
+			ID: "bot1",
+			Persona: config.PersonaConfig{Personality: "Test"},
+			Memory:  config.MemoryConfig{ContextWindow: 10},
+		},
+	}
+
+	proc := NewProcessor(
+		bots,
+		&mockProvider{response: "ok"},
+		store,
+		memory.NewHybridSearch(store, "", nil),
+		nil, nil, nil,
+		func(plt, _, token string) platform.ResponsePublisher {
+			return &mockPublisher{}
+		},
+	)
+
+	msg := IncomingMessage{
+		BotID:         "bot1",
+		ChannelID:     "ch1",
+		UserID:        "user1",
+		Text:          "",
+		PlatformMsgID: "slack-ts-456",
+		EventType:     "delete",
+	}
+
+	got, err := proc.ProcessMessage(context.Background(), msg, nil)
+	if err != nil {
+		t.Fatalf("ProcessMessage delete: %v", err)
+	}
+
+	// Delete events return empty string (no response is sent).
+	if got != "" {
+		t.Errorf("ProcessMessage delete: got %q, want empty string", got)
+	}
+}
+
+func TestHandleEditEvent_missingPlatformMsgID(t *testing.T) {
+	t.Parallel()
+
+	store, err := memory.NewMessageStore(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewMessageStore: %v", err)
+	}
+
+	bots := map[string]*config.BotConfig{
+		"bot1": {
+			ID:     "bot1",
+			Persona: config.PersonaConfig{Personality: "Test"},
+			Memory: config.MemoryConfig{ContextWindow: 10},
+		},
+	}
+
+	proc := NewProcessor(
+		bots,
+		&mockProvider{response: "ok"},
+		store,
+		memory.NewHybridSearch(store, "", nil),
+		nil, nil, nil,
+		func(plt, _, token string) platform.ResponsePublisher {
+			return &mockPublisher{}
+		},
+	)
+
+	// Edit event with no platform message ID — should be a no-op without error.
+	msg := IncomingMessage{
+		BotID:     "bot1",
+		ChannelID: "ch1",
+		UserID:    "user1",
+		Text:      "some edit",
+		EventType: "edit",
+		// PlatformMsgID intentionally omitted.
+	}
+
+	got, err := proc.ProcessMessage(context.Background(), msg, nil)
+	if err != nil {
+		t.Fatalf("ProcessMessage edit (no platform msg id): %v", err)
+	}
+	if got != "" {
+		t.Errorf("ProcessMessage edit (no platform msg id): got %q, want empty string", got)
+	}
+}
+
+func TestHandleDeleteEvent_missingPlatformMsgID(t *testing.T) {
+	t.Parallel()
+
+	store, err := memory.NewMessageStore(context.Background(), "")
+	if err != nil {
+		t.Fatalf("NewMessageStore: %v", err)
+	}
+
+	bots := map[string]*config.BotConfig{
+		"bot1": {
+			ID:     "bot1",
+			Persona: config.PersonaConfig{Personality: "Test"},
+			Memory: config.MemoryConfig{ContextWindow: 10},
+		},
+	}
+
+	proc := NewProcessor(
+		bots,
+		&mockProvider{response: "ok"},
+		store,
+		memory.NewHybridSearch(store, "", nil),
+		nil, nil, nil,
+		func(plt, _, token string) platform.ResponsePublisher {
+			return &mockPublisher{}
+		},
+	)
+
+	// Delete event with no platform message ID — should be a no-op without error.
+	msg := IncomingMessage{
+		BotID:     "bot1",
+		ChannelID: "ch1",
+		UserID:    "user1",
+		EventType: "delete",
+		// PlatformMsgID intentionally omitted.
+	}
+
+	got, err := proc.ProcessMessage(context.Background(), msg, nil)
+	if err != nil {
+		t.Fatalf("ProcessMessage delete (no platform msg id): %v", err)
+	}
+	if got != "" {
+		t.Errorf("ProcessMessage delete (no platform msg id): got %q, want empty string", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // isDangerousTool
 // ---------------------------------------------------------------------------
 

@@ -536,6 +536,16 @@ func (p *Processor) handleEditEvent(ctx context.Context, cfg *config.BotConfig, 
 	hKey := historyKey(msg)
 	p.store.UpdateInHistory(hKey, msg.PlatformMsgID, msg.Text)
 
+	// Invalidate stale memories linked to the edited message.
+	// Memories are LLM-extracted summaries that may reference the old content.
+	// Clearing them ensures the next extraction cycle (triggered by auto_extract
+	// on the next message) recreates memories from the corrected text.
+	if p.search != nil {
+		if err := p.search.DeleteByPlatformMsgID(ctx, msg.BotID, msg.PlatformMsgID); err != nil {
+			slog.Warn("edit event: memory invalidation failed", "error", err)
+		}
+	}
+
 	slog.Info("edit event processed", "bot", msg.BotID, "platform_msg_id", msg.PlatformMsgID)
 	return "", nil // No response to send for edit events.
 }

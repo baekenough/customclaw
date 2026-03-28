@@ -279,7 +279,7 @@ func (e *MemoryExtractor) callLLM(ctx context.Context, convText string) ([]extra
 // vector is generated and included in the OpenSearch document to enable hybrid
 // kNN + BM25 search. Embedding failures are logged but do not prevent indexing.
 func (e *MemoryExtractor) storeMemory(ctx context.Context, botID, userID string, m extractedMemory) error {
-	memoryID, err := e.store.StoreMemory(ctx, botID, userID, m.Category, m.Content)
+	memoryID, err := e.store.StoreMemory(ctx, botID, userID, m.Category, m.Content, "")
 	if err != nil {
 		return err
 	}
