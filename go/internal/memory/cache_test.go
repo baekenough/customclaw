@@ -176,7 +176,7 @@ func TestInvalidateBot_clearsL1(t *testing.T) {
 	c.PutL1("bot1", "query-b", results)
 	c.PutL1("bot2", "query-c", results)
 
-	// Invalidate bot1.
+	// Invalidate bot1 only.
 	c.InvalidateBot(context.Background(), "bot1")
 
 	// bot1 entries should be gone.
@@ -186,12 +186,9 @@ func TestInvalidateBot_clearsL1(t *testing.T) {
 	if _, ok := c.GetL1("bot1", "query-b"); ok {
 		t.Error("expected bot1 query-b to be invalidated")
 	}
-	// InvalidateBot flushes the entire L1 map (l1Key hashes "botID|query" so
-	// bot-scoped filtering is not possible without a reverse index). This is
-	// by design — delete events are rare and the 5-minute TTL limits impact.
-	// Verify bot2 entry is also cleared (expected side effect, not a bug).
-	if _, ok := c.GetL1("bot2", "query-c"); ok {
-		t.Error("expected full L1 flush to also clear bot2 query-c")
+	// bot2 entries should survive.
+	if _, ok := c.GetL1("bot2", "query-c"); !ok {
+		t.Error("expected bot2 query-c to survive, but it was invalidated")
 	}
 }
 

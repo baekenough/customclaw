@@ -42,6 +42,7 @@ type SearchCache struct {
 }
 
 type l1Entry struct {
+	botID    string
 	results  []SearchResult
 	cachedAt time.Time
 }
@@ -89,7 +90,7 @@ func (c *SearchCache) PutL1(botID, query string, results []SearchResult) {
 		}
 		c.order = append(c.order, key)
 	}
-	c.entries[key] = &l1Entry{results: results, cachedAt: time.Now()}
+	c.entries[key] = &l1Entry{botID: botID, results: results, cachedAt: time.Now()}
 }
 
 // evictOldestLocked removes expired entries then, if still over capacity,
@@ -254,37 +255,22 @@ func l2FieldKey(vec []float32) string {
 }
 
 // InvalidateBot removes all L1 and L2 cache entries for the given bot.
-//
-// It is called after a delete cascade so stale search results are not served.
-// L1 eviction iterates the in-memory map under the write lock; L2 eviction
-// issues a single DEL on the Redis hash key.  Failures are logged at Debug
-// level and never returned to the caller — cache invalidation is best-effort.
+// Called after delete/edit cascade so stale search results are not served.
+// L1 entries store botID for selective eviction; L2 issues a single Redis DEL.
+// Failures are best-effort — logged at Debug level, never returned to caller.
 func (c *SearchCache) InvalidateBot(ctx context.Context, botID string) {
-	// L1: scan entries and remove those whose key starts with the bot prefix.
-	// l1Key hashes the full "botID|query" string, so we cannot reconstruct the
-	// key directly.  Instead we store a reverse map in the entry's cachedAt field
-	// — but we don't have that.  Iterate all entries and keep only those that
-	// were NOT created for this bot by re-computing the key prefix pattern.
-	//
-	// Because l1Key is a SHA-256 of "botID|query", we cannot reverse-map back to
-	// botID without storing it.  The practical solution: delete all L1 entries
-	// that match any query for this bot.  We track the bot prefix in the order
-	// slice using a dedicated per-bot sentinel key set.
-	//
-	// Simpler approach: rebuild the entries map, keeping only keys whose botID
-	// prefix does not match.  We check by regenerating the key for a sentinel
-	// query — but that only gives one key.
-	//
-	// Correct approach: store botID alongside each entry so we can filter.
-	// Rather than refactoring the entry struct here, we use the bot-scoped
-	// L1 invalidation via a dedicated prefix set maintained below.
-	//
-	// Current design stores entries as opaque hashes.  We flush the entire L1
-	// for simplicity and correctness: in practice InvalidateBot is rare (only on
-	// message delete), and L1 has a 5-minute TTL, so a full flush is acceptable.
 	c.mu.Lock()
-	c.entries = make(map[string]*l1Entry)
-	c.order = c.order[:0]
+	n := 0
+	for _, k := range c.order {
+		entry, ok := c.entries[k]
+		if ok && entry.botID == botID {
+			delete(c.entries, k)
+		} else if ok {
+			c.order[n] = k
+			n++
+		}
+	}
+	c.order = c.order[:n]
 	c.mu.Unlock()
 
 	// L2: delete the bot's Redis hash key in one round-trip.

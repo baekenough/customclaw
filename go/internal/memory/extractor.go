@@ -119,6 +119,19 @@ func (e *MemoryExtractor) ExtractAndStore(ctx context.Context, botID, channelID 
 		return nil
 	}
 
+	// Resolve the most recent message's DB UUID for CDC linkage.
+	// Memories extracted from this batch are linked to the trigger message
+	// so delete/edit events can cascade to associated memories.
+	var sourceMessageID string
+	if last := history[len(history)-1]; last.PlatformMsgID != "" {
+		id, lookupErr := e.store.GetMessageIDByPlatformID(ctx, botID, last.PlatformMsgID)
+		if lookupErr != nil {
+			slog.Debug("extractor: source message lookup failed", "error", lookupErr)
+		} else {
+			sourceMessageID = id
+		}
+	}
+
 	convText := buildConversationText(history)
 
 	extracted, extractErr := e.callLLM(ctx, convText)
@@ -149,7 +162,7 @@ func (e *MemoryExtractor) ExtractAndStore(ctx context.Context, botID, channelID 
 		if exists {
 			continue
 		}
-		if storeErr := e.storeMemory(ctx, botID, channelID, m); storeErr != nil {
+		if storeErr := e.storeMemory(ctx, botID, channelID, sourceMessageID, m); storeErr != nil {
 			slog.Warn("extractor: failed to store memory",
 				"category", m.Category,
 				"error", storeErr,
@@ -211,6 +224,16 @@ func (e *MemoryExtractor) ExtractThreadMemories(ctx context.Context, botID, chan
 
 	stored := 0
 	for _, thread := range threads {
+		// Resolve the most recent thread message for CDC linkage.
+		var threadSourceID string
+		if len(thread.Messages) > 0 {
+			last := thread.Messages[len(thread.Messages)-1]
+			if last.PlatformMsgID != "" {
+				id, _ := e.store.GetMessageIDByPlatformID(ctx, botID, last.PlatformMsgID)
+				threadSourceID = id
+			}
+		}
+
 		prefix := threadContextPrefix(channelID, thread.FirstAt)
 		convText := prefix + "\n" + buildConversationText(thread.Messages)
 
@@ -237,7 +260,7 @@ func (e *MemoryExtractor) ExtractThreadMemories(ctx context.Context, botID, chan
 			if exists {
 				continue
 			}
-			if err := e.storeMemory(ctx, botID, channelID, m); err != nil {
+			if err := e.storeMemory(ctx, botID, channelID, threadSourceID, m); err != nil {
 				slog.Warn("extractor: failed to store thread memory",
 					"thread", thread.ThreadTS,
 					"error", err,
@@ -278,8 +301,8 @@ func (e *MemoryExtractor) callLLM(ctx context.Context, convText string) ([]extra
 // indexes it in OpenSearch. When an EmbeddingClient is available, the content
 // vector is generated and included in the OpenSearch document to enable hybrid
 // kNN + BM25 search. Embedding failures are logged but do not prevent indexing.
-func (e *MemoryExtractor) storeMemory(ctx context.Context, botID, userID string, m extractedMemory) error {
-	memoryID, err := e.store.StoreMemory(ctx, botID, userID, m.Category, m.Content, "")
+func (e *MemoryExtractor) storeMemory(ctx context.Context, botID, userID, sourceMessageID string, m extractedMemory) error {
+	memoryID, err := e.store.StoreMemory(ctx, botID, userID, m.Category, m.Content, sourceMessageID)
 	if err != nil {
 		return err
 	}
