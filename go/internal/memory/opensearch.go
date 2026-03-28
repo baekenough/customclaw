@@ -170,17 +170,17 @@ func (c *OpenSearchClient) migrateToVersionedIndex(ctx context.Context, target s
 	}
 	log.Printf("opensearch: reindexed %s → %s", legacyIndexName, target)
 
-	// Step 3: create alias.
-	if err := c.createAlias(ctx, target, AliasName); err != nil {
-		return fmt.Errorf("create alias %s→%s: %w", AliasName, target, err)
-	}
-	log.Printf("opensearch: alias %s → %s created", AliasName, target)
-
-	// Step 4: delete the legacy plain index now that the alias owns the name.
+	// Step 3: delete the legacy plain index so the alias name is freed.
 	if err := c.deleteIndex(ctx, legacyIndexName); err != nil {
 		return fmt.Errorf("delete legacy index %s: %w", legacyIndexName, err)
 	}
 	log.Printf("opensearch: deleted legacy index %s", legacyIndexName)
+
+	// Step 4: create alias now that the name is available.
+	if err := c.createAlias(ctx, target, AliasName); err != nil {
+		return fmt.Errorf("create alias %s→%s: %w", AliasName, target, err)
+	}
+	log.Printf("opensearch: alias %s → %s created", AliasName, target)
 	return nil
 }
 
