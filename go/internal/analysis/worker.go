@@ -34,7 +34,7 @@ func StartAnalysisConsumer(ctx context.Context, rdb *redis.Client) {
 		// Non-fatal: the group may already exist in a restarted scenario.
 	}
 
-	provider := llm.NewClaudeProvider()
+	provider := llm.NewClaudeCLIProvider()
 
 	go consumeLoop(ctx, rdb, consumerName, provider)
 	slog.Info("analysis consumer started", "stream", AnalysisStream)

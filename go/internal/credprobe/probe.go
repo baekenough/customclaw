@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -128,6 +129,33 @@ func checkOpenAI(ctx context.Context) checkResult {
 		body := readBodyTruncated(resp.Body, 200)
 		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body)}
 	}
+}
+
+// checkClaudeCLI validates that the claude CLI binary is present and runnable
+// by executing `claude --version` with a 10-second timeout.
+// Returns ("unconfigured", "") when neither CLAUDE_CLI_PATH nor a PATH-visible
+// "claude" binary is found.
+func checkClaudeCLI(ctx context.Context) checkResult {
+	cliPath := os.Getenv("CLAUDE_CLI_PATH")
+	if cliPath == "" {
+		var err error
+		cliPath, err = exec.LookPath("claude")
+		if err != nil {
+			return checkResult{"unconfigured", ""}
+		}
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(reqCtx, cliPath, "--version") //nolint:gosec
+	if err := cmd.Run(); err != nil {
+		if reqCtx.Err() == context.DeadlineExceeded {
+			return checkResult{"error", "claude CLI timed out"}
+		}
+		return checkResult{"error", err.Error()}
+	}
+	return checkResult{"ok", ""}
 }
 
 // checkGemini validates the Gemini API key via a GET to /v1beta/models.
@@ -284,6 +312,7 @@ type provider struct {
 
 var providers = []provider{
 	{"claude", checkClaude},
+	{"claude-cli", checkClaudeCLI},
 	{"openai", checkOpenAI},
 	{"gemini", checkGemini},
 }

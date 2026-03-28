@@ -16,12 +16,21 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       MAX_CONCURRENT_WORKERS: "10"
       MERGE_WINDOW_SECONDS: "30"
-      # LLM provider API keys
+      # Claude CLI subprocess mode
+      CONTAINER_HOME: /home/appuser
+      CLAUDE_CLI_PATH: /usr/local/bin/claude
+      # LLM provider API keys (fallback when Claude CLI is unavailable)
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
     volumes:
       - ../bots:/app/bots:ro
+      # Claude CLI binary mounted from host (resolved at deploy time via CLAUDE_CLI_PATH env var)
+      - ${CLAUDE_CLI_PATH:-/usr/local/bin/claude}:/usr/local/bin/claude:ro
+      # Claude credentials directory: rw required for OAuth token refresh
+      - ${CLAUDE_CONFIG_DIR:-/home/baekenough/.claude}:/home/appuser/.claude:rw
+      # Target repos for FullAgent analysis (read-only for security)
+      - /home/baekenough/workspace:/workspace:ro
     entrypoint: ["worker"]
 
   go-app:
