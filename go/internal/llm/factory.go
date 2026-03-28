@@ -17,17 +17,6 @@ func claudeCLIAvailable() bool {
 	return err == nil
 }
 
-// codexCLIAvailable reports whether the codex binary can be found. It checks
-// CODEX_CLI_PATH first, then falls back to PATH lookup.
-func codexCLIAvailable() bool {
-	if p := os.Getenv("CODEX_CLI_PATH"); p != "" {
-		_, err := exec.LookPath(p)
-		return err == nil
-	}
-	_, err := exec.LookPath("codex")
-	return err == nil
-}
-
 // NewProvider creates the appropriate Provider for the given provider name.
 // All providers use direct API SDK calls with keys from environment variables.
 //
