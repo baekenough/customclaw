@@ -2,6 +2,7 @@ package memory
 
 import (
 	"testing"
+	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -316,6 +317,72 @@ func TestBuildConversationText_RoleLabels(t *testing.T) {
 	}
 	if !contains(text, "Assistant: world") {
 		t.Errorf("expected 'Assistant: world' in output:\n%s", text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// threadContextPrefix
+// ---------------------------------------------------------------------------
+
+func TestThreadContextPrefix_Format(t *testing.T) {
+	firstAt := time.Date(2026, 3, 28, 15, 0, 0, 0, time.UTC)
+	got := threadContextPrefix("C123ABC", firstAt)
+	want := "[#C123ABC | 2026-03-28 | thread]"
+	if got != want {
+		t.Errorf("threadContextPrefix = %q; want %q", got, want)
+	}
+}
+
+func TestThreadContextPrefix_ZeroTime(t *testing.T) {
+	got := threadContextPrefix("general", time.Time{})
+	// Zero time formats as "0001-01-01" — just ensure it doesn't panic and
+	// the channel name and "thread" label are present.
+	if !contains(got, "general") {
+		t.Errorf("expected channel name in prefix: %q", got)
+	}
+	if !contains(got, "thread") {
+		t.Errorf("expected 'thread' label in prefix: %q", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// buildConversationText with thread messages
+// ---------------------------------------------------------------------------
+
+func TestBuildConversationText_ThreadMessages(t *testing.T) {
+	// Thread messages have Timestamp fields; buildConversationText should
+	// format them the same as channel messages (role labels, truncation, etc.).
+	messages := []Message{
+		{Role: "user", Content: "Can you summarise the PR?", Timestamp: "2026-03-28T10:00:00Z"},
+		{Role: "assistant", Content: "Sure, the PR adds thread chunking.", Timestamp: "2026-03-28T10:01:00Z"},
+		{Role: "user", Content: "Thanks!", Timestamp: "2026-03-28T10:02:00Z"},
+	}
+	text := buildConversationText(messages)
+	if !contains(text, "User: Can you summarise the PR?") {
+		t.Errorf("expected user message in output:\n%s", text)
+	}
+	if !contains(text, "Assistant: Sure, the PR adds thread chunking.") {
+		t.Errorf("expected assistant message in output:\n%s", text)
+	}
+	lines := nonEmptyLines(text)
+	if len(lines) != 3 {
+		t.Errorf("want 3 non-empty lines, got %d", len(lines))
+	}
+}
+
+func TestBuildConversationText_WithPrefix(t *testing.T) {
+	// Verify that callers can prepend a context prefix to the conversation text
+	// as ExtractThreadMemories does.
+	messages := []Message{
+		{Role: "user", Content: "hello"},
+	}
+	prefix := "[#C999 | 2026-03-28 | thread]"
+	text := prefix + "\n" + buildConversationText(messages)
+	if !contains(text, prefix) {
+		t.Errorf("expected prefix in combined text:\n%s", text)
+	}
+	if !contains(text, "User: hello") {
+		t.Errorf("expected message in combined text:\n%s", text)
 	}
 }
 

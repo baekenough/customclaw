@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/baekenough/customclaw/internal/llm"
@@ -163,6 +164,97 @@ func (e *MemoryExtractor) ExtractAndStore(ctx context.Context, botID, channelID 
 		"channel", channelID,
 		"count", stored,
 	)
+
+	// Thread-level extraction for richer conversational context.
+	// Runs after channel-level extraction; errors are non-fatal.
+	if err := e.ExtractThreadMemories(ctx, botID, channelID); err != nil {
+		slog.Warn("extractor: thread extraction failed",
+			"bot", botID,
+			"channel", channelID,
+			"error", err,
+		)
+	}
+
+	return nil
+}
+
+// threadContextPrefix builds a contextual prefix for thread-level memories.
+// The prefix embeds channel and date context into the vector embedding space,
+// improving retrieval precision for channel- or time-scoped queries.
+// Format: "[#channel | 2006-01-02 | thread]"
+func threadContextPrefix(channelID string, firstAt time.Time) string {
+	date := firstAt.Format("2006-01-02")
+	return fmt.Sprintf("[#%s | %s | thread]", channelID, date)
+}
+
+// ExtractThreadMemories extracts memories from recent threads in a channel.
+// Unlike ExtractAndStore which processes the linear channel conversation,
+// this method processes complete threads as coherent units, preserving
+// conversational context that spans multiple messages.
+//
+// Errors from individual thread LLM calls or storage failures are logged and
+// skipped; processing continues for remaining threads. The method itself
+// returns nil unless a fatal setup error occurs.
+func (e *MemoryExtractor) ExtractThreadMemories(ctx context.Context, botID, channelID string) error {
+	threads, err := e.store.GetRecentThreads(ctx, botID, channelID, 3, 20)
+	if err != nil {
+		slog.Warn("extractor: failed to load threads",
+			"bot", botID,
+			"channel", channelID,
+			"error", err,
+		)
+		return nil
+	}
+	if len(threads) == 0 {
+		return nil
+	}
+
+	stored := 0
+	for _, thread := range threads {
+		prefix := threadContextPrefix(channelID, thread.FirstAt)
+		convText := prefix + "\n" + buildConversationText(thread.Messages)
+
+		extracted, err := e.callLLM(ctx, convText)
+		if err != nil {
+			slog.Warn("extractor: thread llm call failed",
+				"thread", thread.ThreadTS,
+				"error", err,
+			)
+			continue
+		}
+
+		// Prepend the contextual prefix to each extracted memory so that the
+		// channel/date context is embedded into the vector representation.
+		for i := range extracted {
+			extracted[i].Content = prefix + " " + extracted[i].Content
+		}
+
+		for _, m := range extracted {
+			if m.Content == "" {
+				continue
+			}
+			exists, _ := e.store.MemoryExists(ctx, botID, m.Category, m.Content)
+			if exists {
+				continue
+			}
+			if err := e.storeMemory(ctx, botID, channelID, m); err != nil {
+				slog.Warn("extractor: failed to store thread memory",
+					"thread", thread.ThreadTS,
+					"error", err,
+				)
+				continue
+			}
+			stored++
+		}
+	}
+
+	if stored > 0 {
+		slog.Info("extractor: thread memories stored",
+			"bot", botID,
+			"channel", channelID,
+			"count", stored,
+		)
+	}
 	return nil
 }
 

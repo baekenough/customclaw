@@ -247,6 +247,80 @@ func (s *MessageStore) GetThreadMessages(
 	return msgs, nil
 }
 
+// ThreadGroup holds messages belonging to a single conversation thread.
+type ThreadGroup struct {
+	ThreadTS  string    // thread identifier (Slack ts, Discord thread ID)
+	ChannelID string
+	Messages  []Message
+	FirstAt   time.Time // timestamp of earliest message in the thread
+}
+
+// GetRecentThreads returns the most recent active threads for a bot in a channel.
+// Threads are ordered by their most recent message timestamp descending.
+// Only threads with 2+ messages are returned (single messages are not threads).
+// maxThreads caps the number of threads; maxMsgsPerThread caps messages per thread.
+func (s *MessageStore) GetRecentThreads(ctx context.Context, botID, channelID string, maxThreads, maxMsgsPerThread int) ([]ThreadGroup, error) {
+	if s.pool == nil {
+		return nil, nil
+	}
+	const qThreads = `
+		SELECT thread_ts
+		FROM messages
+		WHERE bot_id = $1 AND channel_id = $2
+		  AND thread_ts IS NOT NULL AND thread_ts != ''
+		  AND deleted_at IS NULL
+		GROUP BY thread_ts
+		HAVING COUNT(*) >= 2
+		ORDER BY MAX(timestamp) DESC
+		LIMIT $3`
+	rows, err := s.pool.Query(ctx, qThreads, botID, channelID, maxThreads)
+	if err != nil {
+		return nil, fmt.Errorf("GetRecentThreads: %w", err)
+	}
+	defer rows.Close()
+
+	var threadIDs []string
+	for rows.Next() {
+		var ts string
+		if err := rows.Scan(&ts); err != nil {
+			return nil, fmt.Errorf("GetRecentThreads scan: %w", err)
+		}
+		threadIDs = append(threadIDs, ts)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("GetRecentThreads rows: %w", err)
+	}
+
+	groups := make([]ThreadGroup, 0, len(threadIDs))
+	for _, threadTS := range threadIDs {
+		msgs, err := s.GetThreadMessages(ctx, botID, channelID, threadTS, maxMsgsPerThread)
+		if err != nil {
+			slog.Warn("GetRecentThreads: failed to fetch thread messages",
+				"thread_ts", threadTS, "error", err)
+			continue
+		}
+		if len(msgs) == 0 {
+			continue
+		}
+
+		// Determine earliest message timestamp for contextual prefix.
+		firstAt := time.Time{}
+		if ts := msgs[0].Timestamp; ts != "" {
+			if t, parseErr := time.Parse(time.RFC3339, ts); parseErr == nil {
+				firstAt = t
+			}
+		}
+
+		groups = append(groups, ThreadGroup{
+			ThreadTS:  threadTS,
+			ChannelID: channelID,
+			Messages:  msgs,
+			FirstAt:   firstAt,
+		})
+	}
+	return groups, nil
+}
+
 // GetChannelMessages returns up to limit channel-level messages, optionally
 // excluding a specific thread.
 func (s *MessageStore) GetChannelMessages(

@@ -542,3 +542,48 @@ func TestCloseNilPool(t *testing.T) {
 	// Should not panic.
 	store.Close()
 }
+
+// ---------------------------------------------------------------------------
+// GetRecentThreads — no-op when pool is nil
+// ---------------------------------------------------------------------------
+
+func TestGetRecentThreadsNilPool(t *testing.T) {
+	store, _ := NewMessageStore(context.Background(), "")
+	groups, err := store.GetRecentThreads(context.Background(), "bot1", "C123", 5, 20)
+	if err != nil {
+		t.Fatalf("GetRecentThreads with nil pool: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Errorf("expected empty slice for nil pool, got %d groups", len(groups))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ThreadGroup struct
+// ---------------------------------------------------------------------------
+
+func TestThreadGroupFields(t *testing.T) {
+	firstAt := time.Date(2026, 3, 28, 9, 0, 0, 0, time.UTC)
+	msgs := []Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "hi"},
+	}
+	g := ThreadGroup{
+		ThreadTS:  "1711616400.000100",
+		ChannelID: "C999",
+		Messages:  msgs,
+		FirstAt:   firstAt,
+	}
+	if g.ThreadTS != "1711616400.000100" {
+		t.Errorf("unexpected ThreadTS: %q", g.ThreadTS)
+	}
+	if g.ChannelID != "C999" {
+		t.Errorf("unexpected ChannelID: %q", g.ChannelID)
+	}
+	if len(g.Messages) != 2 {
+		t.Errorf("expected 2 messages, got %d", len(g.Messages))
+	}
+	if !g.FirstAt.Equal(firstAt) {
+		t.Errorf("unexpected FirstAt: %v", g.FirstAt)
+	}
+}
