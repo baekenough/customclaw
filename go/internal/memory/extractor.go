@@ -70,16 +70,19 @@ var jsonArrayRe = regexp.MustCompile("(?s)```(?:json)?\\s*(\\[.*?\\])\\s*```")
 
 // MemoryExtractor distils conversation history into long-term memory entries.
 // It calls the LLM with a haiku-class model for cost efficiency and stores
-// extracted facts in PostgreSQL, optionally indexing them in OpenSearch.
+// extracted facts in PostgreSQL, optionally indexing them in OpenSearch with
+// embedding vectors for hybrid kNN + BM25 search.
 type MemoryExtractor struct {
 	provider llm.Provider
 	store    *MessageStore
 	osClient *OpenSearchClient
+	embedder *EmbeddingClient // nil when OPENAI_API_KEY is unset
 	dsn      string
 }
 
 // NewMemoryExtractor creates a MemoryExtractor with the supplied dependencies.
-// osClient may be nil when OpenSearch is not configured.
+// osClient may be nil when OpenSearch is not configured. An EmbeddingClient is
+// created from OPENAI_API_KEY; if absent, indexing proceeds without vectors.
 func NewMemoryExtractor(
 	provider llm.Provider,
 	store *MessageStore,
@@ -90,6 +93,7 @@ func NewMemoryExtractor(
 		provider: provider,
 		store:    store,
 		osClient: osClient,
+		embedder: NewEmbeddingClient(),
 		dsn:      dsn,
 	}
 }
@@ -178,14 +182,26 @@ func (e *MemoryExtractor) callLLM(ctx context.Context, convText string) ([]extra
 	return parseExtraction(resp.Text), nil
 }
 
-// storeMemory persists a single extracted memory to PostgreSQL and optionally OpenSearch.
+// storeMemory persists a single extracted memory to PostgreSQL and optionally
+// indexes it in OpenSearch. When an EmbeddingClient is available, the content
+// vector is generated and included in the OpenSearch document to enable hybrid
+// kNN + BM25 search. Embedding failures are logged but do not prevent indexing.
 func (e *MemoryExtractor) storeMemory(ctx context.Context, botID, userID string, m extractedMemory) error {
 	memoryID, err := e.store.StoreMemory(ctx, botID, userID, m.Category, m.Content)
 	if err != nil {
 		return err
 	}
 	if e.osClient != nil {
-		if err := e.osClient.IndexMemory(ctx, memoryID, botID, m.Content, m.Category, userID); err != nil {
+		var vec []float32
+		if e.embedder != nil {
+			v, embErr := e.embedder.Embed(ctx, m.Content)
+			if embErr != nil {
+				slog.Warn("extractor: embedding generation failed, indexing without vector", "error", embErr)
+			} else {
+				vec = v
+			}
+		}
+		if err := e.osClient.IndexMemory(ctx, memoryID, botID, m.Content, m.Category, userID, vec); err != nil {
 			slog.Warn("extractor: opensearch index failed", "error", err)
 			// Non-fatal: PostgreSQL is the source of truth.
 		}

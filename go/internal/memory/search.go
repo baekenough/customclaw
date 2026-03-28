@@ -134,20 +134,26 @@ func expandQueries(text string) []string {
 	return deduped
 }
 
-// HybridSearch combines OpenSearch nori-based keyword search with a
-// PostgreSQL fallback.  osClient may be nil when OpenSearch is unavailable;
-// the search then falls back entirely to PostgreSQL.
+// HybridSearch combines OpenSearch hybrid search (BM25 + kNN vector) with a
+// PostgreSQL fallback. osClient may be nil when OpenSearch is unavailable;
+// the search then falls back entirely to PostgreSQL. embedder may be nil when
+// OPENAI_API_KEY is unset; search then uses BM25 only.
 type HybridSearch struct {
 	osClient *OpenSearchClient // nil if OpenSearch is unavailable
 	store    *MessageStore
+	embedder *EmbeddingClient // nil when OpenAI unavailable; BM25-only fallback
 }
 
-// NewHybridSearch creates a HybridSearch.  It attempts to connect to OpenSearch
+// NewHybridSearch creates a HybridSearch. It attempts to connect to OpenSearch
 // at opensearchURL; if that fails it logs a warning and continues without it.
 // If opensearchURL is empty, the OPENSEARCH_URL env var is consulted
-// (default "http://opensearch:9200").
+// (default "http://opensearch:9200"). An EmbeddingClient is created from
+// OPENAI_API_KEY; if the key is absent, hybrid search falls back to BM25.
 func NewHybridSearch(store *MessageStore, opensearchURL string) *HybridSearch {
-	h := &HybridSearch{store: store}
+	h := &HybridSearch{
+		store:    store,
+		embedder: NewEmbeddingClient(),
+	}
 	client, err := NewOpenSearchClient(opensearchURL)
 	if err != nil {
 		log.Printf("opensearch client init failed (search will use PostgreSQL fallback): %v", err)
@@ -232,21 +238,51 @@ func (h *HybridSearch) Search(ctx context.Context, botID, channelID, queryText s
 		}
 	}
 
-	// --- Step 2: OpenSearch search ---
+	// --- Step 2: OpenSearch hybrid search (BM25 + kNN when embedder available) ---
 	if h.osClient != nil {
-		for _, q := range queries {
-			hits, err := h.osClient.Search(ctx, botID, q, topK)
+		// Attempt to embed the original query text for vector similarity.
+		// Use the first (most representative) query variant for embedding.
+		var queryVector []float32
+		if h.embedder != nil {
+			vec, err := h.embedder.Embed(ctx, queryText)
 			if err != nil {
-				log.Printf("opensearch memory search failed: %v", err)
-				break
+				log.Printf("embedding failed, falling back to BM25: %v", err)
+			} else {
+				queryVector = vec
 			}
-			for _, item := range hits {
-				key := [2]string{item.Category, item.Content}
-				if seen[key] {
-					continue
+		}
+
+		if queryVector != nil {
+			// Hybrid search: single call combines BM25 + kNN ranking.
+			hits, err := h.osClient.HybridSearchOS(ctx, botID, queries[0], queryVector, topK)
+			if err != nil {
+				log.Printf("opensearch hybrid search failed: %v", err)
+			} else {
+				for _, item := range hits {
+					key := [2]string{item.Category, item.Content}
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					results = append(results, item)
 				}
-				seen[key] = true
-				results = append(results, item)
+			}
+		} else {
+			// BM25-only fallback: iterate over all query variants.
+			for _, q := range queries {
+				hits, err := h.osClient.Search(ctx, botID, q, topK)
+				if err != nil {
+					log.Printf("opensearch memory search failed: %v", err)
+					break
+				}
+				for _, item := range hits {
+					key := [2]string{item.Category, item.Content}
+					if seen[key] {
+						continue
+					}
+					seen[key] = true
+					results = append(results, item)
+				}
 			}
 		}
 	}

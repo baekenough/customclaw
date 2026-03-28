@@ -33,9 +33,12 @@ func versionedIndexName(version int) string {
 }
 
 // indexSettings is the JSON body for creating the memories index with the
-// nori Korean analyzer. It mirrors the Python opensearch_client.py definition.
+// nori Korean analyzer and kNN vector field for hybrid search.
 var indexSettings = map[string]any{
 	"settings": map[string]any{
+		"index": map[string]any{
+			"knn": true, // Enable kNN for this index (required for knn_vector fields).
+		},
 		"analysis": map[string]any{
 			"analyzer": map[string]any{
 				"korean": map[string]any{
@@ -55,6 +58,15 @@ var indexSettings = map[string]any{
 			"created_at":        map[string]any{"type": "date"},
 			"embedding_version": map[string]any{"type": "keyword"},
 			"embedded_at":       map[string]any{"type": "date"},
+			"content_vector": map[string]any{
+				"type":      "knn_vector",
+				"dimension": embeddingDimension,
+				"method": map[string]any{
+					"name":       "hnsw",
+					"space_type": "cosinesimil",
+					"engine":     "lucene",
+				},
+			},
 		},
 	},
 }
@@ -318,16 +330,26 @@ func (c *OpenSearchClient) deleteIndex(ctx context.Context, name string) error {
 
 // IndexMemory indexes a single memory document.
 // memoryID is used as the document _id for consistency with PostgreSQL.
-func (c *OpenSearchClient) IndexMemory(ctx context.Context, memoryID, botID, content, category, userID string) error {
+// contentVector is the embedding vector for the content field. When nil,
+// the content_vector field is omitted and the document falls back to BM25-only
+// search — this preserves backward compatibility with existing documents.
+func (c *OpenSearchClient) IndexMemory(ctx context.Context, memoryID, botID, content, category, userID string, contentVector []float32) error {
 	now := time.Now().UTC().Format(time.RFC3339)
+	embVersion := "v1-bm25"
+	if contentVector != nil {
+		embVersion = "v1"
+	}
 	doc := map[string]any{
 		"bot_id":            botID,
 		"user_id":           userID,
 		"category":          category,
 		"content":           content,
 		"created_at":        now,
-		"embedding_version": "v1", // static for now; will be dynamic with vector embeddings
+		"embedding_version": embVersion,
 		"embedded_at":       now,
+	}
+	if contentVector != nil {
+		doc["content_vector"] = contentVector
 	}
 	body, err := json.Marshal(doc)
 	if err != nil {
@@ -478,6 +500,102 @@ func (c *OpenSearchClient) Delete(ctx context.Context, memoryID string) error {
 		return fmt.Errorf("delete doc status %d: %s", resp.StatusCode, b)
 	}
 	return nil
+}
+
+// HybridSearchOS performs a hybrid query combining BM25 text match and kNN
+// vector similarity using the OpenSearch neural-search plugin's hybrid query.
+// If queryVector is nil, it falls back to the pure BM25 Search method.
+// The content_vector field is excluded from the returned _source to avoid
+// returning large vector payloads to callers.
+func (c *OpenSearchClient) HybridSearchOS(ctx context.Context, botID, query string, queryVector []float32, topK int) ([]SearchResult, error) {
+	if queryVector == nil {
+		return c.Search(ctx, botID, query, topK)
+	}
+
+	// Build the hybrid query using the neural-search plugin's "hybrid" query type.
+	// The two sub-queries are:
+	//   1. BM25 match on "content" with the Korean analyzer.
+	//   2. kNN nearest-neighbour search on "content_vector".
+	reqBody := map[string]any{
+		"size": topK,
+		"_source": map[string]any{
+			"excludes": []string{"content_vector"},
+		},
+		"query": map[string]any{
+			"hybrid": map[string]any{
+				"queries": []map[string]any{
+					{
+						"bool": map[string]any{
+							"must": []map[string]any{
+								{
+									"match": map[string]any{
+										"content": map[string]any{
+											"query":    query,
+											"analyzer": "korean",
+										},
+									},
+								},
+							},
+							"filter": []map[string]any{
+								{
+									"term": map[string]any{
+										"bot_id": botID,
+									},
+								},
+							},
+						},
+					},
+					{
+						"knn": map[string]any{
+							"content_vector": map[string]any{
+								"vector": queryVector,
+								"k":      topK,
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
+
+	url := c.indexURL("/_search")
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("hybrid search status %d: %s", resp.StatusCode, b)
+	}
+
+	var osResp osSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&osResp); err != nil {
+		return nil, fmt.Errorf("decode hybrid search response: %w", err)
+	}
+
+	results := make([]SearchResult, 0, len(osResp.Hits.Hits))
+	for _, hit := range osResp.Hits.Hits {
+		results = append(results, SearchResult{
+			Content:   hit.Source.Content,
+			Category:  hit.Source.Category,
+			Score:     hit.Score,
+			CreatedAt: hit.Source.CreatedAt,
+		})
+	}
+	return results, nil
 }
 
 // indexURL returns the full URL for an operation on the memories alias.
