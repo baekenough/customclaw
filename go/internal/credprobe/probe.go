@@ -36,8 +36,9 @@ var stateTracker = struct {
 
 // checkResult holds the outcome of a single provider check.
 type checkResult struct {
-	status string // "ok", "error", or "unconfigured"
-	errMsg string // non-empty only when status == "error"
+	status  string // "ok", "error", "degraded", or "unconfigured"
+	errMsg  string // non-empty only when status == "error" or "degraded"
+	errKind string // "auth", "quota", "transient", "network", or ""
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +50,7 @@ type checkResult struct {
 func checkClaude(ctx context.Context) checkResult {
 	apiKey := os.Getenv("ANTHROPIC_API_KEY")
 	if apiKey == "" {
-		return checkResult{"unconfigured", ""}
+		return checkResult{"unconfigured", "", ""}
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
@@ -60,7 +61,7 @@ func checkClaude(ctx context.Context) checkResult {
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, "https://api.anthropic.com/v1/messages", bytes.NewReader(payload))
 	if err != nil {
-		return checkResult{"error", err.Error()}
+		return checkResult{"error", err.Error(), "network"}
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -69,24 +70,34 @@ func checkClaude(ctx context.Context) checkResult {
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if reqCtx.Err() == context.DeadlineExceeded {
-			return checkResult{"error", "Anthropic API timed out"}
+			return checkResult{"error", "Anthropic API timed out", "network"}
 		}
-		return checkResult{"error", err.Error()}
+		return checkResult{"error", err.Error(), "network"}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return checkResult{"ok", ""}
-	case http.StatusUnauthorized:
+		return checkResult{"ok", "", ""}
+	case http.StatusUnauthorized, http.StatusForbidden:
 		msg := extractErrorMessage(resp.Body)
 		if msg == "" {
 			msg = "invalid or expired API key"
 		}
-		return checkResult{"error", msg}
+		return checkResult{"error", msg, "auth"}
+	case http.StatusTooManyRequests:
+		return checkResult{"degraded", "rate limited", "quota"}
+	case 529: // Anthropic overloaded
+		return checkResult{"degraded", "service overloaded", "transient"}
+	case http.StatusBadRequest:
+		body := readBodyTruncated(resp.Body, 200)
+		if strings.Contains(body, "usage") || strings.Contains(body, "limit") || strings.Contains(body, "credit") {
+			return checkResult{"degraded", fmt.Sprintf("usage limit: %s", body), "quota"}
+		}
+		return checkResult{"error", fmt.Sprintf("bad request: %s", body), ""}
 	default:
 		body := readBodyTruncated(resp.Body, 200)
-		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body)}
+		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body), ""}
 	}
 }
 
@@ -95,7 +106,7 @@ func checkClaude(ctx context.Context) checkResult {
 func checkOpenAI(ctx context.Context) checkResult {
 	apiKey := os.Getenv("OPENAI_API_KEY")
 	if apiKey == "" {
-		return checkResult{"unconfigured", ""}
+		return checkResult{"unconfigured", "", ""}
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
@@ -103,31 +114,35 @@ func checkOpenAI(ctx context.Context) checkResult {
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, "https://api.openai.com/v1/models", nil)
 	if err != nil {
-		return checkResult{"error", err.Error()}
+		return checkResult{"error", err.Error(), "network"}
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if reqCtx.Err() == context.DeadlineExceeded {
-			return checkResult{"error", "OpenAI API timed out after 10 seconds"}
+			return checkResult{"error", "OpenAI API timed out after 10 seconds", "network"}
 		}
-		return checkResult{"error", err.Error()}
+		return checkResult{"error", err.Error(), "network"}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return checkResult{"ok", ""}
-	case http.StatusUnauthorized:
+		return checkResult{"ok", "", ""}
+	case http.StatusUnauthorized, http.StatusForbidden:
 		msg := extractErrorMessage(resp.Body)
 		if msg == "" {
 			msg = "invalid or expired API key"
 		}
-		return checkResult{"error", msg}
+		return checkResult{"error", msg, "auth"}
+	case http.StatusTooManyRequests:
+		return checkResult{"degraded", "rate limited", "quota"}
+	case 529:
+		return checkResult{"degraded", "service overloaded", "transient"}
 	default:
 		body := readBodyTruncated(resp.Body, 200)
-		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body)}
+		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body), ""}
 	}
 }
 
@@ -141,7 +156,7 @@ func checkClaudeCLI(ctx context.Context) checkResult {
 		var err error
 		cliPath, err = exec.LookPath("claude")
 		if err != nil {
-			return checkResult{"unconfigured", ""}
+			return checkResult{"unconfigured", "", ""}
 		}
 	}
 
@@ -151,11 +166,11 @@ func checkClaudeCLI(ctx context.Context) checkResult {
 	cmd := exec.CommandContext(reqCtx, cliPath, "--version") //nolint:gosec
 	if err := cmd.Run(); err != nil {
 		if reqCtx.Err() == context.DeadlineExceeded {
-			return checkResult{"error", "claude CLI timed out"}
+			return checkResult{"error", "claude CLI timed out", "network"}
 		}
-		return checkResult{"error", err.Error()}
+		return checkResult{"error", err.Error(), ""}
 	}
-	return checkResult{"ok", ""}
+	return checkResult{"ok", "", ""}
 }
 
 // checkGemini validates the Gemini API key via a GET to /v1beta/models.
@@ -163,7 +178,7 @@ func checkClaudeCLI(ctx context.Context) checkResult {
 func checkGemini(ctx context.Context) checkResult {
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	if apiKey == "" {
-		return checkResult{"unconfigured", ""}
+		return checkResult{"unconfigured", "", ""}
 	}
 
 	url := "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey
@@ -173,30 +188,32 @@ func checkGemini(ctx context.Context) checkResult {
 
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
-		return checkResult{"error", err.Error()}
+		return checkResult{"error", err.Error(), "network"}
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		if reqCtx.Err() == context.DeadlineExceeded {
-			return checkResult{"error", "Gemini API timed out after 10 seconds"}
+			return checkResult{"error", "Gemini API timed out after 10 seconds", "network"}
 		}
-		return checkResult{"error", err.Error()}
+		return checkResult{"error", err.Error(), "network"}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		return checkResult{"ok", ""}
+		return checkResult{"ok", "", ""}
 	case http.StatusBadRequest, http.StatusForbidden:
 		msg := extractErrorMessage(resp.Body)
 		if msg == "" {
 			msg = fmt.Sprintf("API returned %d", resp.StatusCode)
 		}
-		return checkResult{"error", msg}
+		return checkResult{"error", msg, "auth"}
+	case http.StatusTooManyRequests:
+		return checkResult{"degraded", "rate limited", "quota"}
 	default:
 		body := readBodyTruncated(resp.Body, 200)
-		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body)}
+		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body), ""}
 	}
 }
 
@@ -205,21 +222,25 @@ func checkGemini(ctx context.Context) checkResult {
 // ---------------------------------------------------------------------------
 
 // saveStatus upserts a provider's credential status into the credential_status table.
-func saveStatus(ctx context.Context, pool *pgxpool.Pool, provider, status, errMsg string) {
+func saveStatus(ctx context.Context, pool *pgxpool.Pool, provider, status, errMsg, errKind string) {
 	const q = `
-		INSERT INTO credential_status (provider, status, error, checked_at)
-		VALUES ($1, $2, $3, NOW())
+		INSERT INTO credential_status (provider, status, error, error_kind, checked_at)
+		VALUES ($1, $2, $3, $4, NOW())
 		ON CONFLICT (provider) DO UPDATE
 			SET status     = EXCLUDED.status,
 			    error      = EXCLUDED.error,
+			    error_kind = EXCLUDED.error_kind,
 			    checked_at = EXCLUDED.checked_at`
 
-	var errArg *string
+	var errArg, kindArg *string
 	if errMsg != "" {
 		errArg = &errMsg
 	}
+	if errKind != "" {
+		kindArg = &errKind
+	}
 
-	if _, err := pool.Exec(ctx, q, provider, status, errArg); err != nil {
+	if _, err := pool.Exec(ctx, q, provider, status, errArg, kindArg); err != nil {
 		slog.Error("credential probe: failed to save status",
 			"provider", provider,
 			"status", status,
@@ -333,7 +354,7 @@ func runProbe(ctx context.Context, pool *pgxpool.Pool) {
 				"status", result.status,
 			)
 		}
-		saveStatus(ctx, pool, p.name, result.status, result.errMsg)
+		saveStatus(ctx, pool, p.name, result.status, result.errMsg, result.errKind)
 		maybeAlert(p.name, result.status, result.errMsg)
 	}
 }

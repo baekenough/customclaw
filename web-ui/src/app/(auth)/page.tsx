@@ -14,6 +14,7 @@ import {
   Search,
   Wind,
   Bot,
+  Terminal,
   MessageSquare,
   DollarSign,
   RefreshCw,
@@ -43,8 +44,9 @@ interface AirflowHealthDetail {
 
 interface LlmProviderStatus {
   provider: string;
-  status: string;
+  status: string;   // "ok" | "degraded" | "error" | "unconfigured"
   error: string | null;
+  errorKind: string | null;  // "auth" | "quota" | "transient" | "network" | null
   checkedAt: string;
 }
 
@@ -112,6 +114,7 @@ const SERVICE_ICONS = {
 
 const PROVIDER_CONFIG: Record<string, { label: string; icon: typeof Bot }> = {
   claude: { label: "Claude (Anthropic)", icon: Bot },
+  "claude-cli": { label: "Claude CLI", icon: Terminal },
   openai: { label: "OpenAI", icon: Bot },
   gemini: { label: "Gemini (Google)", icon: Bot },
 };
@@ -560,28 +563,41 @@ export default function DashboardPage() {
               };
               const Icon = config.icon;
               const isOk = p.status === "ok";
+              const isDegraded = p.status === "degraded";
               const isUnconfigured = p.status === "unconfigured";
+
+              const iconBg = isUnconfigured
+                ? "bg-muted"
+                : isOk
+                  ? "bg-emerald-500/15"
+                  : isDegraded
+                    ? "bg-amber-500/15"
+                    : "bg-destructive/15";
+
+              const iconColor = isUnconfigured
+                ? "text-muted-foreground"
+                : isOk
+                  ? "text-emerald-500"
+                  : isDegraded
+                    ? "text-amber-400"
+                    : "text-destructive";
+
+              const degradedLabel = (() => {
+                if (!isDegraded) return null;
+                switch (p.errorKind) {
+                  case "quota": return "한도 초과";
+                  case "transient": return "일시 오류";
+                  default: return "성능 저하";
+                }
+              })();
+
               return (
                 <Card key={p.provider} className="border-border/50">
                   <CardContent className="flex items-center gap-3 p-4">
                     <div
-                      className={`flex h-9 w-9 items-center justify-center rounded-lg ${
-                        isUnconfigured
-                          ? "bg-muted"
-                          : isOk
-                            ? "bg-emerald-500/15"
-                            : "bg-destructive/15"
-                      }`}
+                      className={`flex h-9 w-9 items-center justify-center rounded-lg ${iconBg}`}
                     >
-                      <Icon
-                        className={`h-4 w-4 ${
-                          isUnconfigured
-                            ? "text-muted-foreground"
-                            : isOk
-                              ? "text-emerald-500"
-                              : "text-destructive"
-                        }`}
-                      />
+                      <Icon className={`h-4 w-4 ${iconColor}`} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-xs text-muted-foreground">
@@ -593,7 +609,7 @@ export default function DashboardPage() {
                         <>
                           <Badge
                             variant={
-                              isOk
+                              isOk || isDegraded
                                 ? "default"
                                 : isUnconfigured
                                   ? "outline"
@@ -602,16 +618,24 @@ export default function DashboardPage() {
                             className={`mt-0.5 text-xs ${
                               isOk
                                 ? "bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20 border-0"
-                                : isUnconfigured
-                                  ? "text-muted-foreground"
-                                  : ""
+                                : isDegraded
+                                  ? "bg-amber-500/15 text-amber-400 hover:bg-amber-500/20 border-0"
+                                  : isUnconfigured
+                                    ? "text-muted-foreground"
+                                    : ""
                             }`}
                           >
-                            {isOk ? "정상" : isUnconfigured ? "미설정" : "오류"}
+                            {isOk
+                              ? "정상"
+                              : isDegraded
+                                ? degradedLabel
+                                : isUnconfigured
+                                  ? "미설정"
+                                  : "오류"}
                           </Badge>
-                          {p.error && (
+                          {p.error && !isOk && (
                             <p
-                              className="mt-1 text-[10px] text-destructive truncate"
+                              className={`mt-1 text-[10px] truncate ${isDegraded ? "text-amber-400" : "text-destructive"}`}
                               title={p.error}
                             >
                               {p.error.length > 40

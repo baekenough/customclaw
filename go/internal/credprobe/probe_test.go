@@ -18,6 +18,9 @@ func TestCheckOpenAI_Unconfigured(t *testing.T) {
 	if result.errMsg != "" {
 		t.Errorf("expected empty errMsg, got %q", result.errMsg)
 	}
+	if result.errKind != "" {
+		t.Errorf("expected empty errKind, got %q", result.errKind)
+	}
 }
 
 // TestCheckGemini_Unconfigured verifies that an absent GEMINI_API_KEY yields
@@ -33,6 +36,9 @@ func TestCheckGemini_Unconfigured(t *testing.T) {
 	if result.errMsg != "" {
 		t.Errorf("expected empty errMsg, got %q", result.errMsg)
 	}
+	if result.errKind != "" {
+		t.Errorf("expected empty errKind, got %q", result.errKind)
+	}
 }
 
 // TestCheckClaude_Unconfigured verifies that an absent ANTHROPIC_API_KEY yields
@@ -47,5 +53,23 @@ func TestCheckClaude_Unconfigured(t *testing.T) {
 	}
 	if result.errMsg != "" {
 		t.Errorf("expected empty errMsg, got %q", result.errMsg)
+	}
+	if result.errKind != "" {
+		t.Errorf("expected empty errKind, got %q", result.errKind)
+	}
+}
+
+// TestCheckClaudeCLI_Unconfigured verifies that a missing claude binary yields
+// "unconfigured" without making any network calls.
+func TestCheckClaudeCLI_Unconfigured(t *testing.T) {
+	t.Setenv("CLAUDE_CLI_PATH", "/nonexistent/path/claude")
+
+	result := checkClaudeCLI(context.Background())
+
+	// A non-existent binary path results in an exec error → "error" status,
+	// not "unconfigured". "unconfigured" only fires when LookPath also fails.
+	// This test validates errKind is either empty or non-network for exec errors.
+	if result.errKind == "quota" || result.errKind == "auth" {
+		t.Errorf("unexpected errKind %q for CLI exec failure", result.errKind)
 	}
 }

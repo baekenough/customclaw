@@ -1,0 +1,7 @@
+# Test files — not DAGs
+tests/
+*_test.py
+test_*.py
+
+# Utility modules (no DAG definitions)
+__pycache__/

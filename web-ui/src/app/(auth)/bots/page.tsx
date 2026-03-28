@@ -42,6 +42,23 @@ interface BotData {
   createdAt: string;
 }
 
+type ProviderKey = "claude" | "claude-cli" | "codex" | "openai" | string;
+
+function getProviderLabel(p: ProviderKey): string {
+  if (p === "claude" || p === "claude-cli") return "Claude";
+  if (p === "codex") return "Codex";
+  if (p === "openai") return "OpenAI";
+  return p || "—";
+}
+
+function getProviderBadgeClass(p: ProviderKey): string {
+  if (p === "claude" || p === "claude-cli")
+    return "bg-violet-500/15 text-violet-400 border-0";
+  if (p === "codex" || p === "openai")
+    return "bg-emerald-500/15 text-emerald-400 border-0";
+  return "";
+}
+
 function getChannelCount(bot: BotData): number {
   // Discord bots: check discord-specific config for guild/channel info
   if (bot.platform === "discord") {
@@ -184,12 +201,24 @@ export default function BotsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell>
-                      <Badge
-                        variant="outline"
-                        className="text-xs capitalize"
-                      >
-                        {bot.claude?.provider ?? "—"}
-                      </Badge>
+                      <div className="flex gap-1">
+                        <Badge
+                          variant="outline"
+                          className={`text-xs ${getProviderBadgeClass(bot.claude?.provider ?? "")}`}
+                        >
+                          {getProviderLabel(bot.claude?.provider ?? "")}
+                        </Badge>
+                        {bot.claude?.provider === "claude-cli" && (
+                          <Badge className="text-xs bg-amber-500/15 text-amber-400 border-0">
+                            CLI
+                          </Badge>
+                        )}
+                        {bot.claude?.provider === "claude" && (
+                          <Badge className="text-xs bg-blue-500/15 text-blue-400 border-0">
+                            API
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <span className="text-sm text-muted-foreground">
