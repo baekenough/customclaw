@@ -60,6 +60,9 @@ export default function NewBotPage() {
   >([]);
   const [allowedChannels, setAllowedChannels] = useState<string[]>([]);
   const [channelInput, setChannelInput] = useState("");
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [geminiApiKey, setGeminiApiKey] = useState("");
 
   const toggleTool = (tool: string) => {
     setEnabledTools((prev) =>
@@ -112,6 +115,9 @@ export default function NewBotPage() {
             allowed_channels: allowedChannels,
             dangerous_tools: selectedDangerousTools,
           },
+          ...(anthropicApiKey && { anthropicApiKey }),
+          ...(openaiApiKey && { openaiApiKey }),
+          ...(geminiApiKey && { geminiApiKey }),
         }),
       });
 
@@ -519,6 +525,51 @@ export default function NewBotPage() {
                   <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 </span>
               </label>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* API Keys */}
+        <Card className="border-border/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">API Keys (선택)</CardTitle>
+            <CardDescription className="text-xs">
+              비워두면 공유 키를 사용합니다. 봇 전용 키를 입력하면 해당 키가 우선 적용됩니다.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="anthropic-key" className="text-xs">Anthropic API Key</Label>
+              <Input
+                id="anthropic-key"
+                type="password"
+                value={anthropicApiKey}
+                onChange={(e) => setAnthropicApiKey(e.target.value)}
+                placeholder="sk-ant-..."
+                className="h-9 text-sm font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="openai-key" className="text-xs">OpenAI API Key</Label>
+              <Input
+                id="openai-key"
+                type="password"
+                value={openaiApiKey}
+                onChange={(e) => setOpenaiApiKey(e.target.value)}
+                placeholder="sk-..."
+                className="h-9 text-sm font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="gemini-key" className="text-xs">Gemini API Key</Label>
+              <Input
+                id="gemini-key"
+                type="password"
+                value={geminiApiKey}
+                onChange={(e) => setGeminiApiKey(e.target.value)}
+                placeholder="AIza..."
+                className="h-9 text-sm font-mono"
+              />
             </div>
           </CardContent>
         </Card>

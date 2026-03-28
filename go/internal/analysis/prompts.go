@@ -1,16 +1,32 @@
 package analysis
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// repoDescription returns a human-readable project description for the given repo.
+func repoDescription(repo string) string {
+	switch {
+	case strings.HasSuffix(repo, "/oh-my-customcode"):
+		return "the oh-my-customcode project. This project is a Claude Code customization framework with agents, skills, rules, and hooks."
+	case strings.HasSuffix(repo, "/customclaw"):
+		return "the customclaw project. This project is a bot management platform with Go worker, Redis streams, Airflow DAGs, and multi-LLM provider support."
+	default:
+		parts := strings.Split(repo, "/")
+		name := parts[len(parts)-1]
+		return fmt.Sprintf("the %s project.", name)
+	}
+}
 
 // architectPrompt returns the Senior Architect analysis prompt for an issue.
-func architectPrompt(issueNumber, title, body, labels, ragContext string) string {
+func architectPrompt(issueNumber, title, body, labels, ragContext, repo string) string {
 	if len(body) > 3000 {
 		body = body[:3000]
 	}
 	ragSection := buildRAGSection(ragContext)
 	return fmt.Sprintf(`You are a senior software architect reviewing GitHub issue #%s `+
-		`for the oh-my-customcode project. This project is a Claude Code customization `+
-		`framework with agents, skills, rules, and hooks.
+		`for `+repoDescription(repo)+`
 
 ## Issue #%s: %s
 
@@ -46,14 +62,13 @@ Analyze this issue thoroughly by exploring the codebase. Respond in Korean with 
 }
 
 // colleaguePrompt returns the Project Colleague review prompt for an issue.
-func colleaguePrompt(issueNumber, title, body, labels, ragContext string) string {
+func colleaguePrompt(issueNumber, title, body, labels, ragContext, repo string) string {
 	if len(body) > 3000 {
 		body = body[:3000]
 	}
 	ragSection := buildRAGSection(ragContext)
 	return fmt.Sprintf(`You are a friendly and experienced project collaborator reviewing GitHub issue #%s `+
-		`for the oh-my-customcode project. This project is a Claude Code customization `+
-		`framework with agents, skills, rules, and hooks.
+		`for `+repoDescription(repo)+`
 
 ## Issue #%s: %s
 
@@ -87,15 +102,14 @@ Provide constructive, collaborative feedback by exploring the codebase. Respond 
 }
 
 // professorPrompt returns the Professor synthesis prompt for an issue.
-func professorPrompt(issueNumber, title, body, labels, architectResult, colleagueResult string) string {
+func professorPrompt(issueNumber, title, body, labels, architectResult, colleagueResult, repo string) string {
 	if len(body) > 2000 {
 		body = body[:2000]
 	}
 	extraContext := fmt.Sprintf("## Architect Analysis\n\n%s\n\n## Colleague Review\n\n%s",
 		architectResult, colleagueResult)
 	return fmt.Sprintf(`You are a distinguished professor and technical advisor synthesizing `+
-		`two independent analyses of GitHub issue #%s for the oh-my-customcode project. `+
-		`This project is a Claude Code customization framework with agents, skills, rules, and hooks.
+		`two independent analyses of GitHub issue #%s for `+repoDescription(repo)+`
 
 ## Issue #%s: %s
 
@@ -144,9 +158,7 @@ func prArchitectPrompt(prNumber, title, body, repo, issueContext string) string 
 		body = body[:3000]
 	}
 	return fmt.Sprintf(`You are a senior software architect reviewing PR #%s `+
-		`for the oh-my-customcode project.
-This project is a Claude Code customization framework with agents (.claude/agents/), `+
-		`skills (.claude/skills/), rules (.claude/rules/), and hooks (.claude/hooks/).
+		`for `+repoDescription(repo)+`
 
 ## PR #%s: %s
 
@@ -184,7 +196,7 @@ func prColleaguePrompt(prNumber, title, body, repo, issueContext string) string 
 		body = body[:3000]
 	}
 	return fmt.Sprintf(`You are an experienced project collaborator reviewing PR #%s `+
-		`for the oh-my-customcode project.
+		`for `+repoDescription(repo)+`
 
 ## PR #%s: %s
 
@@ -218,14 +230,14 @@ func prColleaguePrompt(prNumber, title, body, repo, issueContext string) string 
 }
 
 // prProfessorPrompt returns the Professor PR synthesis prompt.
-func prProfessorPrompt(prNumber, title, body, issueContext, architectResult, colleagueResult string) string {
+func prProfessorPrompt(prNumber, title, body, repo, issueContext, architectResult, colleagueResult string) string {
 	if len(body) > 2000 {
 		body = body[:2000]
 	}
 	combined := fmt.Sprintf("%s\n\n## Architect Review\n%s\n\n## Colleague Review\n%s",
 		issueContext, architectResult, colleagueResult)
 	return fmt.Sprintf(`You are a distinguished professor synthesizing two independent PR reviews `+
-		`for PR #%s.
+		`for PR #%s in `+repoDescription(repo)+`
 
 ## PR #%s: %s
 %s

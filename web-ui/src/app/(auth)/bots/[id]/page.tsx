@@ -51,6 +51,9 @@ interface BotRaw {
   memory: { context_window?: number; auto_extract?: boolean };
   tools: { enabled?: string[] };
   security: { allowed_channels?: string[]; dangerous_tools?: string[] };
+  anthropicApiKey?: string | null;
+  openaiApiKey?: string | null;
+  geminiApiKey?: string | null;
 }
 
 function maskToken(token: string) {
@@ -100,6 +103,9 @@ export default function BotDetailPage({
   const [allowedChannels, setAllowedChannels] = useState<string[]>([]);
   const [channelInput, setChannelInput] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [anthropicApiKey, setAnthropicApiKey] = useState("");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [geminiApiKey, setGeminiApiKey] = useState("");
 
   useEffect(() => {
     fetch(`/api/bots/${id}`)
@@ -130,6 +136,10 @@ export default function BotDetailPage({
         setDangerousTools(data.security?.dangerous_tools ?? []);
         setAllowedChannels(data.security?.allowed_channels ?? []);
         setIsActive(data.isActive);
+        // API keys are masked from API — always start empty so user must re-enter to change
+        setAnthropicApiKey("");
+        setOpenaiApiKey("");
+        setGeminiApiKey("");
       })
       .catch(() => setError("봇 정보를 불러오지 못했습니다"))
       .finally(() => setLoading(false));
@@ -177,6 +187,9 @@ export default function BotDetailPage({
           memory: { context_window: contextWindow, auto_extract: autoExtract },
           tools: { enabled: enabledTools },
           security: { allowed_channels: allowedChannels, dangerous_tools: dangerousTools },
+          ...(anthropicApiKey && { anthropicApiKey }),
+          ...(openaiApiKey && { openaiApiKey }),
+          ...(geminiApiKey && { geminiApiKey }),
         }),
       });
       if (!res.ok) {
@@ -612,6 +625,51 @@ export default function BotDetailPage({
                   <HelpCircle className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 </span>
               </label>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* API Keys */}
+        <Card className="border-border/50">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">API Keys (선택)</CardTitle>
+            <CardDescription className="text-xs">
+              비워두면 공유 키를 사용합니다. 봇 전용 키를 입력하면 해당 키가 우선 적용됩니다.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="edit-anthropic-key" className="text-xs">Anthropic API Key</Label>
+              <Input
+                id="edit-anthropic-key"
+                type="password"
+                value={anthropicApiKey}
+                onChange={(e) => setAnthropicApiKey(e.target.value)}
+                placeholder={bot?.anthropicApiKey ? "••••••••" : "sk-ant-..."}
+                className="h-9 text-sm font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-openai-key" className="text-xs">OpenAI API Key</Label>
+              <Input
+                id="edit-openai-key"
+                type="password"
+                value={openaiApiKey}
+                onChange={(e) => setOpenaiApiKey(e.target.value)}
+                placeholder={bot?.openaiApiKey ? "••••••••" : "sk-..."}
+                className="h-9 text-sm font-mono"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-gemini-key" className="text-xs">Gemini API Key</Label>
+              <Input
+                id="edit-gemini-key"
+                type="password"
+                value={geminiApiKey}
+                onChange={(e) => setGeminiApiKey(e.target.value)}
+                placeholder={bot?.geminiApiKey ? "••••••••" : "AIza..."}
+                className="h-9 text-sm font-mono"
+              />
             </div>
           </CardContent>
         </Card>

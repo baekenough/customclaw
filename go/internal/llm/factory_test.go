@@ -62,3 +62,14 @@ func TestNewProvider_Codex_Removed(t *testing.T) {
 		t.Fatal("NewProvider(\"codex\") expected error after codex alias removal, got nil")
 	}
 }
+
+func TestNewProvider_CodexCLI(t *testing.T) {
+	t.Parallel()
+	p, err := NewProvider("codex-cli")
+	if err != nil {
+		t.Fatalf("NewProvider(\"codex-cli\") error: %v", err)
+	}
+	if p.Name() != "codex-cli" {
+		t.Errorf("Name() = %q, want %q", p.Name(), "codex-cli")
+	}
+}

@@ -173,6 +173,33 @@ func checkClaudeCLI(ctx context.Context) checkResult {
 	return checkResult{"ok", "", ""}
 }
 
+// checkCodexCLI validates that the codex CLI binary is present and runnable
+// by executing `codex --version` with a 10-second timeout.
+// Returns ("unconfigured", "") when neither CODEX_CLI_PATH nor a PATH-visible
+// "codex" binary is found.
+func checkCodexCLI(ctx context.Context) checkResult {
+	cliPath := os.Getenv("CODEX_CLI_PATH")
+	if cliPath == "" {
+		var err error
+		cliPath, err = exec.LookPath("codex")
+		if err != nil {
+			return checkResult{"unconfigured", "", ""}
+		}
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, httpTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(reqCtx, cliPath, "--version") //nolint:gosec
+	if err := cmd.Run(); err != nil {
+		if reqCtx.Err() == context.DeadlineExceeded {
+			return checkResult{"error", "codex CLI timed out", "network"}
+		}
+		return checkResult{"error", err.Error(), ""}
+	}
+	return checkResult{"ok", "", ""}
+}
+
 // checkGemini validates the Gemini API key via a GET to /v1beta/models.
 // Returns ("unconfigured", "") when GEMINI_API_KEY is absent.
 func checkGemini(ctx context.Context) checkResult {
@@ -335,6 +362,7 @@ var providers = []provider{
 	{"claude", checkClaude},
 	{"claude-cli", checkClaudeCLI},
 	{"openai", checkOpenAI},
+	{"codex-cli", checkCodexCLI},
 	{"gemini", checkGemini},
 }
 

@@ -15,10 +15,24 @@ import (
 )
 
 const (
-	codebaseIndex = "omc-codebase"
-	ragTopK       = 10
-	ragMaxChunk   = 1500
+	ragTopK     = 10
+	ragMaxChunk = 1500
 )
+
+// codebaseIndexForRepo returns the OpenSearch index name for a given repo.
+func codebaseIndexForRepo(repo string) string {
+	switch {
+	case strings.HasSuffix(repo, "/oh-my-customcode"):
+		return "omc-codebase"
+	case strings.HasSuffix(repo, "/customclaw"):
+		return "customclaw-codebase"
+	default:
+		// Derive index name from repo name.
+		parts := strings.Split(repo, "/")
+		name := parts[len(parts)-1]
+		return strings.ToLower(name) + "-codebase"
+	}
+}
 
 // ragClient performs OpenSearch queries against the codebase index.
 type ragClient struct {
@@ -38,10 +52,10 @@ func newRAGClient() *ragClient {
 	}
 }
 
-// searchRelevantCode searches the omc-codebase OpenSearch index for code
+// searchRelevantCode searches the repo-specific OpenSearch index for code
 // relevant to the given issue title and body.
 // Returns a formatted markdown string of code snippets, or "" on failure.
-func searchRelevantCode(ctx context.Context, title, body string) string {
+func searchRelevantCode(ctx context.Context, title, body, repo string) string {
 	c := newRAGClient()
 
 	// Limit body used for query to first 500 chars — mirrors Python behaviour.
@@ -70,7 +84,7 @@ func searchRelevantCode(ctx context.Context, title, body string) string {
 		return ""
 	}
 
-	url := fmt.Sprintf("%s/%s/_search", c.baseURL, codebaseIndex)
+	url := fmt.Sprintf("%s/%s/_search", c.baseURL, codebaseIndexForRepo(repo))
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		slog.Warn("rag: build request failed", "error", err)
@@ -113,6 +127,13 @@ func searchRelevantCode(ctx context.Context, title, body string) string {
 		return ""
 	}
 
+	// Extract repo name once for path shortening.
+	repoName := repo
+	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
+		repoName = repo[idx+1:]
+	}
+	repoPrefix := "/" + repoName + "/"
+
 	var sections []string
 	seen := make(map[string]bool)
 	for _, hit := range hits {
@@ -124,8 +145,8 @@ func searchRelevantCode(ctx context.Context, title, body string) string {
 
 		// Shorten path for readability.
 		shortPath := fp
-		if idx := strings.Index(fp, "/oh-my-customcode/"); idx >= 0 {
-			shortPath = fp[idx+len("/oh-my-customcode/"):]
+		if idx := strings.Index(fp, repoPrefix); idx >= 0 {
+			shortPath = fp[idx+len(repoPrefix):]
 		}
 
 		content := hit.Source.Content

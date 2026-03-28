@@ -2,6 +2,11 @@ import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+function maskApiKey(key: string | null): string | null {
+  if (!key || key.length < 8) return key ? "••••" : null;
+  return key.slice(0, 4) + "••••" + key.slice(-4);
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -17,7 +22,12 @@ export async function GET(
     if (!bot) {
       return Response.json({ error: "Bot not found" }, { status: 404 });
     }
-    return Response.json(bot);
+    return Response.json({
+      ...bot,
+      anthropicApiKey: maskApiKey(bot.anthropicApiKey),
+      openaiApiKey: maskApiKey(bot.openaiApiKey),
+      geminiApiKey: maskApiKey(bot.geminiApiKey),
+    });
   } catch (error) {
     console.error("GET /api/bots/[id] error:", error);
     return Response.json({ error: "Internal server error" }, { status: 500 });
@@ -58,6 +68,9 @@ export async function PUT(
       memory,
       security,
       isActive,
+      anthropicApiKey,
+      openaiApiKey,
+      geminiApiKey,
     } = body;
 
     const bot = await prisma.bot.update({
@@ -78,6 +91,9 @@ export async function PUT(
         ...(memory !== undefined && { memory }),
         ...(security !== undefined && { security }),
         ...(isActive !== undefined && { isActive }),
+        ...(anthropicApiKey !== undefined && { anthropicApiKey: anthropicApiKey || null }),
+        ...(openaiApiKey !== undefined && { openaiApiKey: openaiApiKey || null }),
+        ...(geminiApiKey !== undefined && { geminiApiKey: geminiApiKey || null }),
       },
     });
 
