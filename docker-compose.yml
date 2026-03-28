@@ -143,6 +143,7 @@ services:
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
       CUSTOMCLAW_SLACK_BOT_TOKEN: ${CUSTOMCLAW_SLACK_BOT_TOKEN}
       CREDENTIAL_ALERT_CHANNEL: ${CREDENTIAL_ALERT_CHANNEL:-C0AMBNY135Z}
+      CLAUDE_CLI_PATH: /usr/local/bin/claude
     command: python -m bot_engine.worker
 
   web-ui:
