@@ -216,10 +216,9 @@ func TestDeleteByPlatformMsgID_invalidatesCacheOnSuccess(t *testing.T) {
 	// early without reaching the cache invalidation step. Verify the cache is
 	// still intact (no spurious flush on no-op path).
 	_ = h.DeleteByPlatformMsgID(context.Background(), "bot1", "msg-999")
-	if _, ok := h.cache.GetL1("bot1", "some query"); !ok {
-		// This is acceptable: the no-op path may or may not flush L1.
-		// The important assertion is that no error was returned.
-	}
+	// The no-op path may or may not flush L1.
+	// The important assertion is that no error was returned above.
+	_, _ = h.cache.GetL1("bot1", "some query")
 }
 
 // ─── truncate ────────────────────────────────────────────────────────────────
