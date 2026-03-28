@@ -82,26 +82,26 @@ func run() error {
 		botsMap[cfg.ID] = cfg
 	}
 
-	// LLM providers — all use direct API SDK calls.
-	// Authentication is handled via environment variables:
-	//   ANTHROPIC_API_KEY, OPENAI_API_KEY, GEMINI_API_KEY
-	claudeProvider := llm.NewClaudeProvider()
+	// LLM providers.
+	// Claude uses the CLI binary (OAuth-based, independent of API key quota).
+	// Codex and Gemini use direct API SDK calls.
+	claudeCLIProvider := llm.NewClaudeCLIProvider()
 	codexProvider := llm.NewCodexProvider()
 	geminiProvider := llm.NewGeminiProvider()
 
 	// Provider registry: keyed by canonical provider name.
-	// Aliases ("claude", "codex", "openai") are resolved in selectProvider.
 	providers := map[string]llm.Provider{
-		"claude":    claudeProvider,
-		"anthropic": claudeProvider, // "anthropic" is an alias for Claude CLI
-		"codex":     codexProvider,
-		"openai":    codexProvider, // "openai" is an alias for the Codex CLI provider
-		"gemini":    geminiProvider,
+		"claude":     claudeCLIProvider,
+		"claude-cli": claudeCLIProvider,
+		"anthropic":  claudeCLIProvider,
+		"codex":      codexProvider,
+		"openai":     codexProvider,
+		"gemini":     geminiProvider,
 	}
 
-	// Keep a reference to the default provider (Claude) for backwards-compatible
+	// Keep a reference to the default provider (Claude CLI) for backwards-compatible
 	// code paths that still hold a single llm.Provider reference.
-	provider := claudeProvider
+	provider := claudeCLIProvider
 
 	// Memory subsystem.
 	store, err := memory.NewMessageStore(ctx, databaseDSN)
