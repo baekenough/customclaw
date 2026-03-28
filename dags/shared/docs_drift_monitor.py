@@ -8,6 +8,7 @@ DAG for deep analysis.
 
 Graph:
     fetch_doc_indexes -> detect_changes -> create_issue_if_needed -> trigger_analysis
+                                                                  -> update_baselines
 """
 
 from __future__ import annotations
@@ -159,9 +160,11 @@ def docs_drift_monitor() -> None:
     def detect_changes(fetched_docs: list[dict]) -> list[dict]:
         """Compare fetched documentation against stored baselines.
 
-        For each source, loads the baseline from an Airflow Variable,
+        For each source, loads the baseline from an Airflow Variable and
         computes added/removed lines focusing on structural elements
-        (paths, section headers), and updates the baseline.
+        (paths, section headers). Baselines are NOT updated here; that
+        happens in ``update_baselines`` after issue creation to ensure
+        changes are never silently lost on issue-creation failure.
 
         Args:
             fetched_docs: Output from ``fetch_doc_indexes``.
@@ -204,10 +207,8 @@ def docs_drift_monitor() -> None:
                 baseline, current_content
             )
 
-            # Update baseline to current content.
-            Variable.set(variable_key, current_content)
             log.info(
-                "Baseline updated for %s. Changes: +%d / -%d structural lines.",
+                "Changes detected for %s: +%d / -%d structural lines.",
                 name,
                 len(added),
                 len(removed),
@@ -322,7 +323,50 @@ def docs_drift_monitor() -> None:
         return None
 
     # ------------------------------------------------------------------
-    # Task 4: Trigger agentnav_issue_analyzer DAG for deep analysis
+    # Task 4: Update baselines after issue creation
+    # ------------------------------------------------------------------
+
+    @task()
+    def update_baselines(
+        changed_sources: list[dict],
+        issue_info: dict | None,
+        fetched_docs: list[dict],
+    ) -> str:
+        """Update baselines after issue creation (or if no issue needed).
+
+        Runs after ``create_issue_if_needed`` to ensure that a failure
+        during issue creation does not silently discard detected changes.
+
+        Args:
+            changed_sources: Output from ``detect_changes``.
+            issue_info: Output from ``create_issue_if_needed`` (may be None).
+            fetched_docs: Output from ``fetch_doc_indexes``.
+
+        Returns:
+            A summary string listing updated sources.
+        """
+        if not changed_sources:
+            return "No changes to update."
+
+        variable_keys = {
+            src["name"]: src["variable_key"] for src in DOC_SOURCES
+        }
+        doc_content = {doc["name"]: doc["content"] for doc in fetched_docs}
+
+        updated: list[str] = []
+        for source in changed_sources:
+            name = source["name"]
+            key = variable_keys.get(name)
+            content = doc_content.get(name)
+            if key and content:
+                Variable.set(key, content)
+                updated.append(name)
+                log.info("Baseline updated for %s.", name)
+
+        return f"Updated baselines: {', '.join(updated)}"
+
+    # ------------------------------------------------------------------
+    # Task 5: Trigger agentnav_issue_analyzer DAG for deep analysis
     # ------------------------------------------------------------------
 
     @task()
@@ -395,6 +439,7 @@ def docs_drift_monitor() -> None:
     changes = detect_changes(fetched)
     issue_info = create_issue_if_needed(changes)
     trigger_analysis(issue_info)
+    update_baselines(changes, issue_info, fetched)  # AFTER issue creation
 
 
 # ---------------------------------------------------------------------------
@@ -590,7 +635,11 @@ def _filter_structural_lines(lines: set[str]) -> list[str]:
             structural.append(stripped)
         elif stripped.startswith("#") and markdown_header_re.match(stripped):
             structural.append(stripped)
-        elif len(stripped) > 5:
+        # Keep llms.txt-style page entries: "- [Title](url): description"
+        elif stripped.startswith("- "):
+            structural.append(stripped)
+        # Keep markdown list items with links that represent doc pages
+        elif re.match(r"^[-*]\s+\[", stripped):
             structural.append(stripped)
     return structural
 
@@ -674,15 +723,23 @@ def _build_drift_issue_body(
         "",
     ]
 
+    # Truncate individual lines; defined once, used inside the loop.
+    def _truncate_line(line: str, max_len: int = 120) -> str:
+        return line[:max_len] + "..." if len(line) > max_len else line
+
     for result in impactful:
         name = result.get("name", "unknown")
         added = result.get("added", [])
         removed = result.get("removed", [])
         analysis = result.get("analysis", "")
 
-        # Truncate individual lines and limit count
-        def _truncate_line(line: str, max_len: int = 120) -> str:
-            return line[:max_len] + "..." if len(line) > max_len else line
+        total_changes = len(added) + len(removed)
+        if total_changes <= 5:
+            severity = "minor"
+        elif total_changes <= 20:
+            severity = "moderate"
+        else:
+            severity = "major"
 
         added_text = (
             "\n".join(f"  - `{_truncate_line(line)}`" for line in added[:15])
@@ -701,7 +758,7 @@ def _build_drift_issue_body(
             removed_text += f"\n  - _... and {len(removed) - 15} more_"
 
         sections += [
-            f"## {name}",
+            f"## {name} — severity: {severity}",
             "",
             "### Changes Detected",
             f"- **Added:**\n{added_text}",
