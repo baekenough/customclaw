@@ -6,7 +6,7 @@ import (
 )
 
 func TestArchitectPrompt(t *testing.T) {
-	result := architectPrompt("42", "Add caching layer", "We need Redis caching.", "enhancement", "")
+	result := architectPrompt("42", "Add caching layer", "We need Redis caching.", "enhancement", "", "org/oh-my-customcode")
 	if result == "" {
 		t.Fatal("architectPrompt returned empty string")
 	}
@@ -19,7 +19,7 @@ func TestArchitectPrompt(t *testing.T) {
 }
 
 func TestColleaguePrompt(t *testing.T) {
-	result := colleaguePrompt("7", "Fix memory leak", "Memory grows unbounded.", "bug", "")
+	result := colleaguePrompt("7", "Fix memory leak", "Memory grows unbounded.", "bug", "", "org/oh-my-customcode")
 	if result == "" {
 		t.Fatal("colleaguePrompt returned empty string")
 	}
@@ -33,7 +33,7 @@ func TestColleaguePrompt(t *testing.T) {
 
 func TestProfessorPrompt(t *testing.T) {
 	result := professorPrompt("99", "Refactor auth", "Auth module is messy.", "refactor",
-		"architect says X", "colleague says Y")
+		"architect says X", "colleague says Y", "org/oh-my-customcode")
 	if result == "" {
 		t.Fatal("professorPrompt returned empty string")
 	}
@@ -81,7 +81,7 @@ func TestPRColleaguePrompt(t *testing.T) {
 }
 
 func TestPRProfessorPrompt(t *testing.T) {
-	result := prProfessorPrompt("33", "chore: update deps", "Bumps versions.", "issue ctx",
+	result := prProfessorPrompt("33", "chore: update deps", "Bumps versions.", "org/oh-my-customcode", "issue ctx",
 		"arch review", "coll review")
 	if result == "" {
 		t.Fatal("prProfessorPrompt returned empty string")
@@ -99,12 +99,12 @@ func TestBodyTruncation(t *testing.T) {
 	longBody := strings.Repeat("x", 5000)
 
 	// None of these should panic.
-	_ = architectPrompt("1", "title", longBody, "labels", "")
-	_ = colleaguePrompt("2", "title", longBody, "labels", "")
-	_ = professorPrompt("3", "title", longBody, "labels", "arch", "coll")
+	_ = architectPrompt("1", "title", longBody, "labels", "", "org/oh-my-customcode")
+	_ = colleaguePrompt("2", "title", longBody, "labels", "", "org/oh-my-customcode")
+	_ = professorPrompt("3", "title", longBody, "labels", "arch", "coll", "org/oh-my-customcode")
 	_ = prArchitectPrompt("4", "title", longBody, "repo", "")
 	_ = prColleaguePrompt("5", "title", longBody, "repo", "")
-	_ = prProfessorPrompt("6", "title", longBody, "", "arch", "coll")
+	_ = prProfessorPrompt("6", "title", longBody, "repo", "", "arch", "coll")
 }
 
 // TestBuildRAGSection verifies the section is empty when ragContext is empty.

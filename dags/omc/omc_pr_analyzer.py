@@ -1,9 +1,12 @@
 """
 omc_pr_analyzer DAG.
 
-Analyzes new GitHub Pull Requests on baekenough/oh-my-customcode by publishing
+Analyzes new GitHub Pull Requests on a configurable repository by publishing
 analysis requests to a Redis Stream. A separate worker process consumes
 the stream and performs the actual Claude-powered analysis.
+
+The target repository defaults to ``baekenough/oh-my-customcode`` but can be
+overridden via the ``repo`` DAG param (e.g. ``baekenough/customclaw``).
 
 Triggered externally via GitHub Actions webhook → SSH → airflow dags trigger.
 
@@ -142,8 +145,8 @@ default_args = {
 @dag(
     dag_id="omc_pr_analyzer",
     description=(
-        "Fetches oh-my-customcode GitHub PR details and publishes a PR analysis "
-        "request to Redis Stream."
+        "Fetches GitHub PR details from a configurable repository and publishes "
+        "a PR analysis request to Redis Stream."
     ),
     schedule=None,
     start_date=datetime(2026, 3, 20),
@@ -155,13 +158,18 @@ default_args = {
             type="integer",
             description="GitHub PR number to analyze",
         ),
+        "repo": Param(
+            default="baekenough/oh-my-customcode",
+            type="string",
+            description="GitHub repository (owner/repo)",
+        ),
     },
-    tags=["project:omc", "pr-analysis", "automated"],
+    tags=["project:omc", "project:customclaw", "pr-analysis", "automated"],
     default_args=default_args,
     doc_md=__doc__,
 )
 def omc_pr_analyzer() -> None:
-    """Orchestrate PR analysis for oh-my-customcode."""
+    """Orchestrate PR analysis for a configurable GitHub repository."""
 
     # ------------------------------------------------------------------
     # Task 1: Fetch PR details from GitHub API
@@ -171,10 +179,11 @@ def omc_pr_analyzer() -> None:
     def fetch_pr_details(**context) -> dict:
         """Fetch pull request details from the GitHub API."""
         pr_number = context["params"]["pr_number"]
+        repo = context["params"].get("repo", TARGET_REPO)
         token = _resolve_github_token()
         headers = _github_headers(token)
 
-        url = GITHUB_API_PULLS_URL.format(repo=TARGET_REPO) + f"/{pr_number}"
+        url = GITHUB_API_PULLS_URL.format(repo=repo) + f"/{pr_number}"
 
         try:
             response = requests.get(url, headers=headers, timeout=DEFAULT_REQUEST_TIMEOUT)
@@ -263,7 +272,9 @@ def omc_pr_analyzer() -> None:
     # ------------------------------------------------------------------
 
     @task()
-    def request_worker_analysis(pr_details: dict, analysis_config: dict) -> str:
+    def request_worker_analysis(
+        pr_details: dict, analysis_config: dict, **context
+    ) -> str:
         """Publish PR analysis request to Redis for worker processing."""
         if not pr_details:
             return "No PR details, skipping."
@@ -274,6 +285,8 @@ def omc_pr_analyzer() -> None:
         r = redis_lib.from_url(redis_url)
 
         pr_number = pr_details.get("number", 0)
+        repo = context["params"].get("repo", TARGET_REPO)
+        repo_name = repo.split("/")[-1]
 
         request_data = {
             "type": "pr_analysis",
@@ -284,8 +297,8 @@ def omc_pr_analyzer() -> None:
             "pr_branch": pr_details.get("head_branch", ""),
             "pr_base": pr_details.get("base_branch", ""),
             "linked_issue": pr_details.get("linked_issue", ""),
-            "repo": "baekenough/oh-my-customcode",
-            "repo_path": "/home/baekenough/workspace/oh-my-customcode",
+            "repo": repo,
+            "repo_path": f"/home/baekenough/workspace/{repo_name}",
             "analysis_scope": analysis_config.get("scope", "standard"),
             "requested_at": datetime.now(timezone.utc).isoformat(),
         }

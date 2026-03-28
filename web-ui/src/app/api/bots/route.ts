@@ -2,6 +2,11 @@ import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+function maskApiKey(key: string | null): string | null {
+  if (!key || key.length < 8) return key ? "••••" : null;
+  return key.slice(0, 4) + "••••" + key.slice(-4);
+}
+
 export async function GET() {
   const session = await auth();
   if (!session) {
@@ -12,7 +17,13 @@ export async function GET() {
     const bots = await prisma.bot.findMany({
       orderBy: { createdAt: "desc" },
     });
-    return Response.json(bots);
+    const maskedBots = bots.map((bot) => ({
+      ...bot,
+      anthropicApiKey: maskApiKey(bot.anthropicApiKey),
+      openaiApiKey: maskApiKey(bot.openaiApiKey),
+      geminiApiKey: maskApiKey(bot.geminiApiKey),
+    }));
+    return Response.json(maskedBots);
   } catch (error) {
     console.error("GET /api/bots error:", error);
     return Response.json({ error: "Internal server error" }, { status: 500 });
@@ -44,6 +55,9 @@ export async function POST(request: NextRequest) {
       memory,
       security,
       isActive,
+      anthropicApiKey,
+      openaiApiKey,
+      geminiApiKey,
     } = body;
 
     const resolvedPlatform = platform ?? "slack";
@@ -88,6 +102,9 @@ export async function POST(request: NextRequest) {
         memory: memory ?? {},
         security: security ?? {},
         isActive: isActive ?? true,
+        ...(anthropicApiKey !== undefined && { anthropicApiKey }),
+        ...(openaiApiKey !== undefined && { openaiApiKey }),
+        ...(geminiApiKey !== undefined && { geminiApiKey }),
       },
     });
 

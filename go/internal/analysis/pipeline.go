@@ -45,11 +45,11 @@ func processAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Prov
 	slog.Info("analysis: processing issue", "issue", issueNumber, "title", truncate(req.IssueTitle, 50))
 
 	// Phase 1: RAG — retrieve relevant code snippets.
-	ragContext := searchRelevantCode(ctx, req.IssueTitle, req.IssueBody)
+	ragContext := searchRelevantCode(ctx, req.IssueTitle, req.IssueBody, repo)
 
 	// Phase 2: Run architect + colleague in parallel.
-	architectPromptText := architectPrompt(issueNumber, req.IssueTitle, req.IssueBody, req.IssueLabels, ragContext)
-	colleaguePromptText := colleaguePrompt(issueNumber, req.IssueTitle, req.IssueBody, req.IssueLabels, ragContext)
+	architectPromptText := architectPrompt(issueNumber, req.IssueTitle, req.IssueBody, req.IssueLabels, ragContext, repo)
+	colleaguePromptText := colleaguePrompt(issueNumber, req.IssueTitle, req.IssueBody, req.IssueLabels, ragContext, repo)
 
 	var architectResult, colleagueResult string
 	g, gctx := errgroup.WithContext(ctx)
@@ -133,7 +133,7 @@ func processAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Prov
 		slog.Info("analysis: running professor synthesis", "issue", issueNumber)
 		profPrompt := professorPrompt(
 			issueNumber, req.IssueTitle, req.IssueBody, req.IssueLabels,
-			architectResult, colleagueResult,
+			architectResult, colleagueResult, repo,
 		)
 		profResp, err := provider.Complete(ctx, &llm.Request{
 			UserMessage: profPrompt,
@@ -221,7 +221,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 	}
 
 	// Step 2: RAG search.
-	ragContext := searchRelevantCode(ctx, req.PRTitle, req.PRBody)
+	ragContext := searchRelevantCode(ctx, req.PRTitle, req.PRBody, repo)
 	combinedContext := issueAnalysisContext
 	if ragSection := buildRAGSection(ragContext); ragSection != "" {
 		if combinedContext != "" {
@@ -322,7 +322,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 	if architectResult != "" && colleagueResult != "" {
 		slog.Info("analysis: running professor PR synthesis", "pr", prNumber)
 		profPrompt := prProfessorPrompt(
-			prNumber, req.PRTitle, req.PRBody,
+			prNumber, req.PRTitle, req.PRBody, repo,
 			issueAnalysisContext, architectResult, colleagueResult,
 		)
 		profResp, err := provider.Complete(ctx, &llm.Request{

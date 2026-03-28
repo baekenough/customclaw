@@ -45,7 +45,7 @@ func TestSearchRelevantCodeFormatting(t *testing.T) {
 
 	t.Setenv("OPENSEARCH_URL", ts.URL)
 
-	result := searchRelevantCode(context.Background(), "test issue", "some body text")
+	result := searchRelevantCode(context.Background(), "test issue", "some body text", "user/oh-my-customcode")
 
 	if result == "" {
 		t.Fatal("expected non-empty result")
@@ -100,7 +100,7 @@ func TestSearchRelevantCodeDeduplication(t *testing.T) {
 
 	t.Setenv("OPENSEARCH_URL", ts.URL)
 
-	result := searchRelevantCode(context.Background(), "title", "body")
+	result := searchRelevantCode(context.Background(), "title", "body", "user/oh-my-customcode")
 
 	// Only one block for foo.go.
 	count := strings.Count(result, "foo.go")
@@ -123,7 +123,7 @@ func TestSearchRelevantCodeEmpty(t *testing.T) {
 
 	t.Setenv("OPENSEARCH_URL", ts.URL)
 
-	result := searchRelevantCode(context.Background(), "title", "body")
+	result := searchRelevantCode(context.Background(), "title", "body", "user/oh-my-customcode")
 	if result != "" {
 		t.Errorf("expected empty result for zero hits, got %q", result)
 	}
@@ -138,7 +138,7 @@ func TestSearchRelevantCodeServerError(t *testing.T) {
 	t.Setenv("OPENSEARCH_URL", ts.URL)
 
 	// Should return "" without panicking.
-	result := searchRelevantCode(context.Background(), "title", "body")
+	result := searchRelevantCode(context.Background(), "title", "body", "user/oh-my-customcode")
 	if result != "" {
 		t.Errorf("expected empty result on server error, got %q", result)
 	}
@@ -165,7 +165,7 @@ func TestSearchRelevantCodeTruncation(t *testing.T) {
 
 	t.Setenv("OPENSEARCH_URL", ts.URL)
 
-	result := searchRelevantCode(context.Background(), "title", "body")
+	result := searchRelevantCode(context.Background(), "title", "body", "user/oh-my-customcode")
 	if !strings.Contains(result, "(truncated)") {
 		t.Error("expected truncation marker in result for long content")
 	}
