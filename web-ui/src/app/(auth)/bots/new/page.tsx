@@ -48,7 +48,7 @@ export default function NewBotPage() {
   const [personality, setPersonality] = useState("");
   const [repoPath, setRepoPath] = useState("");
   const [githubRepo, setGithubRepo] = useState("");
-  const [provider, setProvider] = useState<"claude" | "codex">("claude");
+  const [provider, setProvider] = useState<"claude" | "claude-cli" | "codex">("claude");
   const [model, setModel] = useState("claude-opus-4-5");
   const [maxTurns, setMaxTurns] = useState(5);
   const [fullAgent, setFullAgent] = useState(false);
@@ -431,15 +431,21 @@ export default function NewBotPage() {
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label className="text-xs">Provider</Label>
+                <p className="text-[10px] text-muted-foreground -mt-1">
+                  claude = 자동감지, claude-cli = CLI 강제
+                </p>
                 <Select
                   value={provider}
-                  onValueChange={(v) => setProvider((v ?? "claude") as "claude" | "codex")}
+                  onValueChange={(v) =>
+                    setProvider((v ?? "claude") as "claude" | "claude-cli" | "codex")
+                  }
                 >
                   <SelectTrigger className="h-9 text-sm">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="claude">Claude</SelectItem>
+                    <SelectItem value="claude">Claude (Auto-detect)</SelectItem>
+                    <SelectItem value="claude-cli">Claude CLI</SelectItem>
                     <SelectItem value="codex">Codex</SelectItem>
                   </SelectContent>
                 </Select>

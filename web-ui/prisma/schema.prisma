@@ -121,6 +121,7 @@ model CredentialStatus {
   provider  String   @id @db.VarChar(32)
   status    String   @default("unknown") @db.VarChar(16)
   error     String?
+  errorKind String?  @map("error_kind") @db.VarChar(16)
   checkedAt DateTime @default(now()) @map("checked_at") @db.Timestamptz()
 
   @@map("credential_status")

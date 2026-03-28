@@ -327,13 +327,23 @@ def _process_analysis(request: dict) -> None:
     with ThreadPoolExecutor(max_workers=2) as inner_pool:
         architect_future = inner_pool.submit(
             _run_analysis,
-            issue_number, issue_title, issue_body,
-            issue_labels, "architect", repo_path, rag_section,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            issue_labels=issue_labels,
+            analysis_type="architect",
+            repo_path=repo_path,
+            extra_context=rag_section,
         )
         colleague_future = inner_pool.submit(
             _run_analysis,
-            issue_number, issue_title, issue_body,
-            issue_labels, "colleague", repo_path, rag_section,
+            issue_number=issue_number,
+            issue_title=issue_title,
+            issue_body=issue_body,
+            issue_labels=issue_labels,
+            analysis_type="colleague",
+            repo_path=repo_path,
+            extra_context=rag_section,
         )
         architect_result = architect_future.result()
         colleague_result = colleague_future.result()
@@ -407,6 +417,7 @@ def _run_analysis(
     analysis_type: str,
     repo_path: str,
     extra_context: str = "",
+    base_branch: str = "main",
 ) -> str | None:
     """Run Claude CLI analysis in full_agent mode."""
     if analysis_type == "architect":
@@ -605,15 +616,29 @@ def _run_analysis(
         # Use repo_path if it exists, else fall back to /tmp
         cwd = repo_path if os.path.isdir(repo_path) else "/tmp"
 
-        # Pull latest code before analysis to avoid stale code issues
+        # Checkout the correct base branch before analysis to avoid stale code issues
+        # Sanitize base_branch: strip whitespace, fall back to "main" if empty
+        base_branch = base_branch.strip() if base_branch else "main"
+        if not base_branch:
+            base_branch = "main"
         try:
             subprocess.run(
-                ["git", "-C", cwd, "pull", "--ff-only", "origin", "main"],
+                ["git", "-C", cwd, "fetch", "origin", base_branch],
+                capture_output=True,
+                timeout=30,
+            )
+            subprocess.run(
+                ["git", "-C", cwd, "checkout", f"origin/{base_branch}"],
                 capture_output=True,
                 timeout=30,
             )
         except Exception:
-            pass  # Best-effort pull, don't block analysis
+            log.warning(
+                "Best-effort git checkout failed for #%s (base=%s), "
+                "continuing with current working tree",
+                issue_number,
+                base_branch,
+            )
 
         env = {
             **os.environ,
@@ -815,6 +840,7 @@ def _process_pr_analysis(request: dict) -> None:
     pr_body = request.get("pr_body", "")
     repo = request.get("repo", os.environ.get("DEFAULT_TARGET_REPO", ""))
     repo_path = request.get("repo_path", os.environ.get("DEFAULT_REPO_PATH", ""))
+    pr_base = request.get("pr_base", "main")
 
     log.info("Processing PR analysis for PR #%s: %s", pr_number, pr_title[:50])
 
@@ -869,13 +895,25 @@ def _process_pr_analysis(request: dict) -> None:
     with ThreadPoolExecutor(max_workers=2) as inner_pool:
         architect_future = inner_pool.submit(
             _run_analysis,
-            pr_number, pr_title, pr_body,
-            repo, "pr_architect", repo_path, combined_context,
+            issue_number=pr_number,
+            issue_title=pr_title,
+            issue_body=pr_body,
+            issue_labels=repo,
+            analysis_type="pr_architect",
+            repo_path=repo_path,
+            extra_context=combined_context,
+            base_branch=pr_base,
         )
         colleague_future = inner_pool.submit(
             _run_analysis,
-            pr_number, pr_title, pr_body,
-            repo, "pr_colleague", repo_path, combined_context,
+            issue_number=pr_number,
+            issue_title=pr_title,
+            issue_body=pr_body,
+            issue_labels=repo,
+            analysis_type="pr_colleague",
+            repo_path=repo_path,
+            extra_context=combined_context,
+            base_branch=pr_base,
         )
         architect_result = architect_future.result()
         colleague_result = colleague_future.result()
@@ -928,6 +966,7 @@ def _process_pr_analysis(request: dict) -> None:
             analysis_type="pr_professor",
             repo_path=repo_path,
             extra_context=professor_context,
+            base_branch=pr_base,
         )
         if professor_result:
             _post_github_comment(

@@ -62,6 +62,7 @@ export async function GET() {
     provider: string;
     status: string;
     error: string | null;
+    errorKind: string | null;
     checkedAt: string;
   }> = [];
   try {
@@ -70,6 +71,7 @@ export async function GET() {
       provider: r.provider,
       status: r.status,
       error: r.error,
+      errorKind: r.errorKind ?? null,
       checkedAt: r.checkedAt.toISOString(),
     }));
   } catch {
