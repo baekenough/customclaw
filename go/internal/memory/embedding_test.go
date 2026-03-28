@@ -98,15 +98,7 @@ func fakeEmbeddingResponse(dimension int, v float32) string {
 	return string(b)
 }
 
-func clientWithURL(t *testing.T, url string) *EmbeddingClient {
-	t.Helper()
-	return &EmbeddingClient{
-		apiKey:     "sk-test",
-		httpClient: &http.Client{},
-	}
-}
-
-// embedWithURL calls the embedding endpoint at the given URL instead of the
+// embedWithServer calls the embedding endpoint at the given URL instead of the
 // default OpenAI endpoint. This helper swaps the httpClient's transport to
 // redirect requests to the test server.
 func embedWithServer(t *testing.T, srv *httptest.Server, text string) ([]float32, error) {
