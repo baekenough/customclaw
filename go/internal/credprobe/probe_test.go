@@ -542,10 +542,7 @@ func TestReadBodyTruncated(t *testing.T) {
 func TestCheckClaude_ContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Simulate a slow response — the context should cancel before this completes.
-		select {
-		case <-r.Context().Done():
-			return
-		}
+		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
