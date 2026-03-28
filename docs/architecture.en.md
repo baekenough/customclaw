@@ -6,7 +6,7 @@
 
 ## 1. System Overview
 
-CustomClaw is a multi-tenant bot platform that routes user messages through a Redis Stream pipeline to a worker that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Platform adapters support Slack (Socket Mode), Discord, and Mattermost. Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using the nori Korean analyzer for keyword retrieval. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages nine autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, PR analysis, AgentNav issue analysis, documentation drift monitoring, and an example hello-world DAG.
+CustomClaw is a multi-tenant bot platform that routes user messages through a Redis Stream pipeline to a worker that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Platform adapters support Slack (Socket Mode), Discord, and Mattermost. Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using hybrid BM25 keyword + kNN vector search with multi-tier caching (L1 exact, L2 semantic). A CDC pipeline cascades message deletions and edits to associated memories, maintaining search index consistency. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages nine autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, PR analysis, AgentNav issue analysis, documentation drift monitoring, and an example hello-world DAG.
 
 ---
 
@@ -30,14 +30,23 @@ flowchart LR
     end
 
     subgraph OS [OpenSearch]
-        IDX[(customclaw-memories\nnori analyzer)]
+        IDX[(customclaw-memories\nnori + kNN hybrid)]
     end
 
-    W -->|save_message / get_recent_messages| MSG
+    subgraph Cache [Search Cache]
+        L1[L1: Exact Match]
+        L2[L2: Semantic / Redis]
+    end
+
+    W -->|save / soft_delete / update| MSG
     W -->|extract_and_store| MEM
-    W -->|extract_and_store| IDX
-    W -->|search| IDX
-    MEM -.->|pgvector HNSW\nfuture| W
+    W -->|index + embed| IDX
+    W -->|hybrid search| IDX
+    W -->|CDC cascade delete| MEM
+    W -->|CDC cascade delete| IDX
+    W -->|check / invalidate| L1
+    W -->|check / invalidate| L2
+    MEM -.->|source_message_id FK| MSG
 ```
 
 ### 2.3 Airflow DAG Processing
@@ -131,17 +140,25 @@ sequenceDiagram
 **Extraction pipeline:**
 
 1. `MemoryExtractor` takes the last 10 messages (each capped at 500 chars).
-2. Sends to `claude --model haiku --max-turns 1` with a structured extraction prompt.
+2. Sends to Claude haiku (`--max-turns 1`) with a structured extraction prompt.
 3. Parses the returned JSON array of `{category, content}` items.
-4. Stores each in PostgreSQL `memories` table (with a zero-vector placeholder pending Voyage API integration) and indexes in OpenSearch.
+4. Stores each in PostgreSQL `memories` table with `source_message_id` linking to the originating message, and indexes in OpenSearch with optional embedding vectors.
+5. Thread-level extraction runs after channel-level, grouping messages by thread with contextual prefixes (`[#channel | date | thread]`).
 
 **Search pipeline:**
 
-- `HybridSearch` queries OpenSearch using the `korean` nori analyzer for morphological tokenization of Korean text.
-- pgvector semantic search (HNSW index) is planned for future activation with the Voyage API embedding model (`voyage-3` / 1024 dimensions).
-- Final merge via RRF (Reciprocal Rank Fusion) is designed but not yet active.
+- `HybridSearch` combines BM25 keyword search (nori Korean analyzer) with kNN vector similarity using OpenSearch's neural-search hybrid query.
+- Multi-tier cache: L1 exact-match (in-memory, 5 min TTL) → L2 semantic (Redis cosine similarity ≥ 0.95, 15 min TTL) → L3 KV prefix cache (Anthropic API) → L4 full inference.
+- Short action queries (e.g. "해줘", "계속해") are routed to a PostgreSQL-first path for faster response.
+- Query expansion: Korean verb suffixes are stripped and multiple query variants are searched in parallel.
 
-**Memory categories:** `fact`, `decision`, `preference`
+**CDC (Change Data Capture) pipeline:**
+
+- **Message deletion**: `DeleteByPlatformMsgID` cascades to associated memories via `source_message_id` JOIN — deletes from OpenSearch + PostgreSQL, invalidates search cache.
+- **Message edit**: Stale memories linked to the edited message are invalidated. The next extraction cycle recreates memories from the corrected content.
+- Cache invalidation: L1 full flush + Redis bot hash deletion on delete/edit events.
+
+**Memory categories:** `fact`, `decision`, `preference`, `action`, `context`
 
 ### 3.4 Tool System
 
@@ -372,7 +389,7 @@ sequenceDiagram
 
     W->>PG: save_message (role=user)
     W->>PG: get_recent_messages (context window)
-    W->>OS: search memories (top-k=5, nori keyword)
+    W->>OS: search memories (top-k=5, hybrid BM25+kNN)
     OS-->>W: relevant memory snippets
 
     W->>W: build system prompt + memory context + tool descriptions
@@ -404,11 +421,13 @@ sequenceDiagram
 1. User sends a message to Slack. `BotRunner` validates channel/user, adds hourglass reaction, and publishes to Redis Stream.
 2. Worker picks up the message via `xreadgroup` from consumer group `customclaw-workers`.
 3. User message saved to `messages` table. Recent thread/channel history loaded for context window.
-4. OpenSearch queried for relevant long-term memories using Korean keyword search.
+4. OpenSearch queried for relevant long-term memories using hybrid BM25 keyword + kNN vector search (with multi-tier cache).
 5. Prompt assembled from: persona, memory context, conversation history, tool descriptions (limited mode) or bare user message (full-agent mode).
 6. Claude CLI or Codex CLI invoked as subprocess. In limited mode a second call may follow if a tool was used.
 7. Final text posted to Slack. Assistant message saved to PostgreSQL. Redis Stream entry acknowledged.
 8. Asynchronously (non-blocking): `MemoryExtractor` runs Claude haiku to mine facts/decisions/preferences from the conversation; results stored in PostgreSQL + OpenSearch.
+9. **CDC cascade**: When a platform message is later deleted, `DeleteByPlatformMsgID` resolves the message UUID, finds linked memories via `source_message_id`, deletes them from both OpenSearch and PostgreSQL, and invalidates the search cache.
+10. **Edit cascade**: When a message is edited, the DB content is updated, stale memories are invalidated, and the next extraction cycle recreates memories from the corrected text.
 
 ---
 
@@ -449,6 +468,8 @@ Long-term extracted memories per bot, with pgvector embeddings for future semant
 | `created_at` | TIMESTAMPTZ | — |
 | `expires_at` | TIMESTAMPTZ | Optional TTL |
 | `metadata` | JSONB | Reserved |
+| `embedding_version` | TEXT | Default 'v1'; tracks embedding model version |
+| `embedded_at` | TIMESTAMPTZ | When the embedding was generated |
 
 ### 5.3 `bots`
 

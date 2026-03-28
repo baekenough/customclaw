@@ -62,11 +62,28 @@ Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합�
 
 <p align="center"><img src="../assets/diagrams/04-memory-extraction.png" width="800" /></p>
 
-**현재 구현 상태:**
-- OpenSearch nori 키워드 검색은 완전 구현되어 있습니다.
-- pgvector 시맨틱 검색은 Voyage API 키 확보 후 활성화할 예정입니다 (현재 zero-vector 플레이스홀더).
-- 추출은 대화 4개 메시지 이상 누적 시 Claude haiku(`--max-turns 1`)로 자동 실행됩니다.
-- RRF(Reciprocal Rank Fusion)로 두 검색 결과를 병합하는 코드는 TODO 상태입니다.
+**추출 파이프라인:**
+
+1. `MemoryExtractor`가 최근 10개 메시지를 수집 (각 500자 제한).
+2. Claude haiku(`--max-turns 1`)에 구조화된 추출 프롬프트 전달.
+3. `{category, content}` JSON 배열 파싱.
+4. PostgreSQL `memories` 테이블에 `source_message_id`로 원본 메시지 연결 후 저장, OpenSearch에 임베딩 벡터와 함께 인덱싱.
+5. 채널 레벨 추출 후 스레드 레벨 추출 실행 — 컨텍스트 프리픽스 (`[#채널 | 날짜 | thread]`) 포함.
+
+**검색 파이프라인:**
+
+- `HybridSearch`가 BM25 키워드 검색 (nori 한국어 분석기) + kNN 벡터 유사도 검색을 결합.
+- 멀티 티어 캐시: L1 정확 매칭 (인메모리, 5분 TTL) → L2 시맨틱 (Redis 코사인 유사도 ≥ 0.95, 15분 TTL) → L3 KV 프리픽스 캐시 (Anthropic API) → L4 풀 추론.
+- 단축 액션 쿼리 ("해줘", "계속해" 등)는 PostgreSQL 우선 경로로 라우팅.
+- 쿼리 확장: 한국어 동사 어미 제거 + 복수 쿼리 변형 병렬 검색.
+
+**CDC (Change Data Capture) 파이프라인:**
+
+- **메시지 삭제**: `DeleteByPlatformMsgID`가 `source_message_id` JOIN으로 연관 메모리 추적 → OpenSearch + PostgreSQL에서 삭제 → 검색 캐시 무효화.
+- **메시지 수정**: 수정된 메시지와 연결된 stale 메모리 무효화. 다음 추출 사이클에서 수정된 내용으로 메모리 재생성.
+- 캐시 무효화: 삭제/수정 이벤트 시 L1 전체 플러시 + Redis 봇 해시 삭제.
+
+**메모리 카테고리:** `fact`, `decision`, `preference`, `action`, `context`
 
 ### 3.4 도구 시스템 (tools/)
 
@@ -195,11 +212,16 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
       → PostgreSQL: assistant 메시지 저장
 
 6. [사후 처리] 비동기 메모리 추출
-      → 대화 ≥ 4개 메시지 시 Claude haiku 호출
-      → fact/decision/preference 추출 (JSON)
-      → PostgreSQL memories 테이블 저장
-      → OpenSearch customclaw-memories 인덱스 저장
+      → Claude haiku 호출 (source_message_id 연결)
+      → fact/decision/preference/action/context 추출 (JSON)
+      → PostgreSQL memories 테이블 저장 (source_message_id FK)
+      → OpenSearch 인덱싱 (BM25 + 벡터 임베딩)
+      → 스레드 레벨 추출 (컨텍스트 프리픽스 포함)
       → Redis xack (메시지 확인 처리)
+
+7. [CDC] 메시지 삭제/수정 이벤트 처리
+      → 삭제: source_message_id로 연관 메모리 추적 → OS + PG 삭제 → 캐시 무효화
+      → 수정: DB 내용 업데이트 → stale 메모리 무효화 → 다음 추출 사이클에서 재생성
 ```
 
 ---
@@ -212,14 +234,17 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 
 | 테이블 | 목적 | 주요 인덱스 |
 |--------|------|------------|
-| `messages` | 모든 대화 메시지 저장. thread 또는 채널 레벨 컨텍스트 조회 지원 | `(bot_id, channel_id, thread_ts)`, HNSW cosine 임베딩 |
-| `memories` | 자동 추출된 장기 기억. pgvector로 시맨틱 유사도 검색 지원 (Voyage API 활성화 후) | `(bot_id)`, HNSW cosine 임베딩 |
+| `messages` | 모든 대화 메시지 저장 (soft delete 지원). `deleted_at`, `edited_at`, `original_content` 컬럼으로 삭제/수정 이력 추적 | `(bot_id, channel_id, thread_ts)`, `(bot_id, platform_message_id)`, HNSW cosine 임베딩 |
+| `memories` | 자동 추출된 장기 기억. `source_message_id`로 원본 메시지 연결. BM25 + kNN 하이브리드 검색. CDC 삭제/수정 cascade 지원 | `(bot_id)`, `(source_message_id)`, `(embedding_version)`, HNSW cosine 임베딩 |
 | `bots` | 봇 설정 원장. Web UI에서 CRUD. slack-bolt는 YAML을 우선 사용 | Primary Key(id) |
 | `api_usage_logs` | LLM API 호출 비용 추적 | `(bot_id, created_at)` |
 
 **OpenSearch 인덱스 (`customclaw-memories`):**
-- `content` 필드: nori 커스텀 analyzer (nori_tokenizer + nori_readingform + lowercase)
+- alias `customclaw-memories` → 버전별 인덱스 `customclaw-memories-v{N}` (Blue-Green 무중단 재인덱싱)
+- `content` 필드: nori 커스텀 analyzer (nori_tokenizer + nori_readingform + lowercase) — BM25 키워드 검색
+- `content_vector` 필드: 1024차원 float 벡터 — kNN 유사도 검색 (OpenAI text-embedding-3-small)
 - `bot_id`, `category`, `user_id`: keyword 타입 (정확 매칭 필터)
+- `embedding_version`, `embedded_at`: 임베딩 모델 버전 추적 (재임베딩 시 사용)
 
 ---
 
