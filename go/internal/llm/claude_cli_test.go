@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -54,17 +55,16 @@ func TestClaudeCLIProvider_Name(t *testing.T) {
 func buildCLIArgs(req *Request) (args []string, hasStdin bool) {
 	model := resolveClaudeModel(req.Model)
 
-	maxTurns := req.MaxTurns
-	if maxTurns <= 0 {
-		maxTurns = 10
-	}
-
 	if req.FullAgent {
+		maxTurns := req.MaxTurns
+		if maxTurns <= 0 {
+			maxTurns = 10
+		}
 		args = []string{
 			"--model", model,
 			"--output-format", "text",
 			"--dangerously-skip-permissions",
-			"--max-turns", "10",
+			"--max-turns", strconv.Itoa(maxTurns),
 		}
 		if req.SystemPrompt != "" {
 			args = append(args, "--system-prompt", req.SystemPrompt)

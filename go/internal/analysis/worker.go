@@ -22,6 +22,7 @@ const (
 	analysisBlockDuration = 5 * time.Second
 	analysisPendingIdle   = time.Minute
 	analysisClaimInterval = analysisPendingIdle / 2
+	analysisMaxConcurrent = 4
 )
 
 // StartAnalysisConsumer starts a background goroutine that consumes analysis
@@ -46,12 +47,15 @@ func consumeLoop(ctx context.Context, rdb *redis.Client, consumer string, provid
 	claimTicker := time.NewTicker(analysisClaimInterval)
 	defer claimTicker.Stop()
 
+	// Bounded semaphore limits concurrent processAndAck goroutines.
+	sem := make(chan struct{}, analysisMaxConcurrent)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-claimTicker.C:
-			reclaimIdleAnalysis(ctx, rdb, consumer, provider)
+			reclaimIdleAnalysis(ctx, rdb, consumer, provider, sem)
 		default:
 		}
 
@@ -79,9 +83,11 @@ func consumeLoop(ctx context.Context, rdb *redis.Client, consumer string, provid
 		for _, stream := range entries {
 			for _, msg := range stream.Messages {
 				req := decodeAnalysisMessage(msg)
-				// Process synchronously within the loop goroutine.
-				// Each message is ACKed only after processing (at-least-once).
-				processAndAck(ctx, rdb, msg.ID, req, provider)
+				sem <- struct{}{}
+				go func(id string, r AnalysisRequest) {
+					defer func() { <-sem }()
+					processAndAck(ctx, rdb, id, r, provider)
+				}(msg.ID, req)
 			}
 		}
 	}
@@ -89,7 +95,7 @@ func consumeLoop(ctx context.Context, rdb *redis.Client, consumer string, provid
 
 // reclaimIdleAnalysis uses XAUTOCLAIM to recover pending messages from
 // previously crashed consumers.
-func reclaimIdleAnalysis(ctx context.Context, rdb *redis.Client, consumer string, provider llm.Provider) {
+func reclaimIdleAnalysis(ctx context.Context, rdb *redis.Client, consumer string, provider llm.Provider, sem chan struct{}) {
 	messages, _, err := rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
 		Stream:   AnalysisStream,
 		Group:    AnalysisGroup,
@@ -107,7 +113,11 @@ func reclaimIdleAnalysis(ctx context.Context, rdb *redis.Client, consumer string
 	for _, msg := range messages {
 		slog.Info("analysis: reclaiming idle message", "id", msg.ID)
 		req := decodeAnalysisMessage(msg)
-		processAndAck(ctx, rdb, msg.ID, req, provider)
+		sem <- struct{}{}
+		go func(id string, r AnalysisRequest) {
+			defer func() { <-sem }()
+			processAndAck(ctx, rdb, id, r, provider)
+		}(msg.ID, req)
 	}
 }
 
