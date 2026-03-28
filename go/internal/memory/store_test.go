@@ -559,6 +559,74 @@ func TestGetRecentThreadsNilPool(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// GetMessageIDByPlatformID — no-op when pool is nil
+// ---------------------------------------------------------------------------
+
+func TestGetMessageIDByPlatformID_nilPool(t *testing.T) {
+	store, _ := NewMessageStore(context.Background(), "")
+	id, err := store.GetMessageIDByPlatformID(context.Background(), "bot1", "msg-1")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if id != "" {
+		t.Errorf("expected empty string, got %q", id)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// FindMemoriesBySourceMessage — no-op when pool is nil
+// ---------------------------------------------------------------------------
+
+func TestFindMemoriesBySourceMessage_nilPool(t *testing.T) {
+	store, _ := NewMessageStore(context.Background(), "")
+	ids, err := store.FindMemoriesBySourceMessage(context.Background(), "bot1", "uuid-1")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if ids != nil {
+		t.Errorf("expected nil, got %v", ids)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DeleteMemory — no-op when pool is nil
+// ---------------------------------------------------------------------------
+
+func TestDeleteMemory_nilPool(t *testing.T) {
+	store, _ := NewMessageStore(context.Background(), "")
+	err := store.DeleteMemory(context.Background(), "uuid-1")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// StoreMemory — no-op when pool is nil
+// ---------------------------------------------------------------------------
+
+func TestStoreMemory_nilPool(t *testing.T) {
+	store, _ := NewMessageStore(context.Background(), "")
+	id, err := store.StoreMemory(context.Background(), "bot1", "user1", "fact", "test content", "")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if id != "" {
+		t.Errorf("expected empty string, got %q", id)
+	}
+}
+
+func TestStoreMemory_nilPool_withSourceMessageID(t *testing.T) {
+	store, _ := NewMessageStore(context.Background(), "")
+	id, err := store.StoreMemory(context.Background(), "bot1", "user1", "fact", "test content", "550e8400-e29b-41d4-a716-446655440000")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if id != "" {
+		t.Errorf("expected empty string, got %q", id)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ThreadGroup struct
 // ---------------------------------------------------------------------------
 

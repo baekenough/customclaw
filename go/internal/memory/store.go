@@ -655,24 +655,83 @@ func (s *MessageStore) MemoryExists(
 // indexing. A 1024-dimension zero-vector placeholder is stored for the
 // embedding column (matching the actual pgvector column definition) until a
 // proper embedding pipeline is available.
+//
+// sourceMessageID is the internal UUID of the message that triggered memory
+// extraction. Pass an empty string when the source message is not known;
+// NULLIF ensures empty strings are stored as NULL rather than causing a UUID
+// parse failure.
+//
 // When pool is nil the operation is a no-op and an empty string is returned.
 func (s *MessageStore) StoreMemory(
 	ctx context.Context,
-	botID, userID, category, content string,
+	botID, userID, category, content, sourceMessageID string,
 ) (string, error) {
 	if s.pool == nil {
 		return "", nil
 	}
 	const q = `
-		INSERT INTO memories (bot_id, user_id, category, content, embedding)
-		VALUES ($1, $2, $3, $4, array_fill(0, ARRAY[1024])::vector)
+		INSERT INTO memories (bot_id, user_id, category, content, source_message_id, embedding)
+		VALUES ($1, $2, $3, $4, NULLIF($5, '')::uuid, array_fill(0, ARRAY[1024])::vector)
 		RETURNING id::text`
 	var id string
-	if err := s.pool.QueryRow(ctx, q, botID, userID, category, content).Scan(&id); err != nil {
+	if err := s.pool.QueryRow(ctx, q, botID, userID, category, content, sourceMessageID).Scan(&id); err != nil {
 		slog.Warn("StoreMemory failed", "error", err)
 		return "", err
 	}
 	return id, nil
+}
+
+// GetMessageIDByPlatformID returns the internal UUID for a message identified
+// by its platform-specific message ID. Returns empty string when not found.
+func (s *MessageStore) GetMessageIDByPlatformID(ctx context.Context, botID, platformMsgID string) (string, error) {
+	if s.pool == nil {
+		return "", nil
+	}
+	const q = `SELECT id::text FROM messages_data WHERE bot_id = $1 AND platform_message_id = $2 AND deleted_at IS NULL LIMIT 1`
+	var id string
+	err := s.pool.QueryRow(ctx, q, botID, platformMsgID).Scan(&id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("get message id by platform id: %w", err)
+	}
+	return id, nil
+}
+
+// FindMemoriesBySourceMessage returns memory IDs linked to a source message.
+func (s *MessageStore) FindMemoriesBySourceMessage(ctx context.Context, botID, sourceMessageID string) ([]string, error) {
+	if s.pool == nil {
+		return nil, nil
+	}
+	const q = `SELECT id::text FROM memories WHERE bot_id = $1 AND source_message_id = $2::uuid`
+	rows, err := s.pool.Query(ctx, q, botID, sourceMessageID)
+	if err != nil {
+		return nil, fmt.Errorf("find memories by source message: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// DeleteMemory removes a memory row by ID.
+func (s *MessageStore) DeleteMemory(ctx context.Context, memoryID string) error {
+	if s.pool == nil {
+		return nil
+	}
+	const q = `DELETE FROM memories WHERE id = $1::uuid`
+	_, err := s.pool.Exec(ctx, q, memoryID)
+	if err != nil {
+		return fmt.Errorf("delete memory: %w", err)
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

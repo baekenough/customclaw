@@ -164,3 +164,48 @@ func TestSearchCacheNewWithNilRedis(t *testing.T) {
 		t.Error("NewSearchCache(nil): expected nil rdb")
 	}
 }
+
+// ─── InvalidateBot ───────────────────────────────────────────────────────────
+
+func TestInvalidateBot_clearsL1(t *testing.T) {
+	c := NewSearchCache(nil) // no Redis
+	results := []SearchResult{{Content: "hello", Score: 1.0}}
+
+	// Populate L1 cache for two bots.
+	c.PutL1("bot1", "query-a", results)
+	c.PutL1("bot1", "query-b", results)
+	c.PutL1("bot2", "query-c", results)
+
+	// Invalidate bot1.
+	c.InvalidateBot(context.Background(), "bot1")
+
+	// bot1 entries should be gone.
+	if _, ok := c.GetL1("bot1", "query-a"); ok {
+		t.Error("expected bot1 query-a to be invalidated")
+	}
+	if _, ok := c.GetL1("bot1", "query-b"); ok {
+		t.Error("expected bot1 query-b to be invalidated")
+	}
+	// InvalidateBot flushes the entire L1 map (l1Key hashes "botID|query" so
+	// bot-scoped filtering is not possible without a reverse index). This is
+	// by design — delete events are rare and the 5-minute TTL limits impact.
+	// Verify bot2 entry is also cleared (expected side effect, not a bug).
+	if _, ok := c.GetL1("bot2", "query-c"); ok {
+		t.Error("expected full L1 flush to also clear bot2 query-c")
+	}
+}
+
+func TestInvalidateBot_nilRedis(t *testing.T) {
+	c := NewSearchCache(nil)
+	// Should not panic with nil Redis.
+	c.InvalidateBot(context.Background(), "bot1")
+}
+
+func TestInvalidateBot_emptyCache(t *testing.T) {
+	c := NewSearchCache(nil)
+	// Should succeed on an empty cache without panic.
+	c.InvalidateBot(context.Background(), "bot-does-not-exist")
+	if len(c.entries) != 0 {
+		t.Errorf("entries map should remain empty, got %d entries", len(c.entries))
+	}
+}
