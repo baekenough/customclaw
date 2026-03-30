@@ -717,3 +717,202 @@ func classifyGemini(resp *http.Response) checkResult {
 		return checkResult{"error", fmt.Sprintf("unexpected status %d: %s", resp.StatusCode, body), ""}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Alerter injection tests
+// ---------------------------------------------------------------------------
+
+// mockNotifier records SendMessage calls for assertion in tests.
+type mockNotifier struct {
+	messages []string
+}
+
+func (m *mockNotifier) SendMessage(_ context.Context, _, text, _ string) (string, error) {
+	m.messages = append(m.messages, text)
+	return "", nil
+}
+
+func (m *mockNotifier) AddReaction(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func TestSetAlertNotifier(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	if alertNotifier != mock {
+		t.Error("SetAlertNotifier did not update alertNotifier")
+	}
+}
+
+func TestDefaultAlertNotifierIsNotNil(t *testing.T) {
+	if alertNotifier == nil {
+		t.Error("default alertNotifier is nil")
+	}
+}
+
+func TestDefaultAlertNotifierIsLogNotifier(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	// Re-set to the default (mirrors package-level initialisation).
+	alertNotifier = notify.NewLogNotifier()
+
+	if _, ok := alertNotifier.(*notify.LogNotifier); !ok {
+		t.Errorf("default alertNotifier type = %T, want *notify.LogNotifier", alertNotifier)
+	}
+}
+
+func TestSendAlert_UsesNotifier(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	sendAlert("test-provider", "auth failed")
+
+	if len(mock.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mock.messages))
+	}
+	if !strings.Contains(mock.messages[0], "test-provider") {
+		t.Errorf("alert message %q should contain provider name", mock.messages[0])
+	}
+	if !strings.Contains(mock.messages[0], "auth failed") {
+		t.Errorf("alert message %q should contain error detail", mock.messages[0])
+	}
+}
+
+func TestSendAlert_MessageContainsCredentialKeyword(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	sendAlert("openai", "invalid key")
+
+	if len(mock.messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(mock.messages))
+	}
+	// The alert message should mention credential renewal.
+	if !strings.Contains(mock.messages[0], "credential") && !strings.Contains(mock.messages[0], "Credential") {
+		t.Errorf("alert message %q should mention 'credential'", mock.messages[0])
+	}
+}
+
+func TestMaybeAlert_TransitionToError_Fires(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	// Seed known state as "ok".
+	stateTracker.mu.Lock()
+	stateTracker.states["test-fire"] = "ok"
+	stateTracker.mu.Unlock()
+
+	maybeAlert("test-fire", "error", "just broke")
+
+	if len(mock.messages) != 1 {
+		t.Errorf("expected 1 alert on ok→error transition, got %d", len(mock.messages))
+	}
+}
+
+func TestMaybeAlert_ErrorToError_NoFire(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	stateTracker.mu.Lock()
+	stateTracker.states["test-nofire"] = "error"
+	stateTracker.mu.Unlock()
+
+	maybeAlert("test-nofire", "error", "still broken")
+
+	if len(mock.messages) != 0 {
+		t.Errorf("expected 0 alerts on error→error, got %d (should deduplicate)", len(mock.messages))
+	}
+}
+
+func TestMaybeAlert_OkToOk_NoFire(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	stateTracker.mu.Lock()
+	stateTracker.states["test-ok"] = "ok"
+	stateTracker.mu.Unlock()
+
+	maybeAlert("test-ok", "ok", "")
+
+	if len(mock.messages) != 0 {
+		t.Errorf("expected 0 alerts on ok→ok, got %d", len(mock.messages))
+	}
+}
+
+func TestMaybeAlert_DegradedToError_Fires(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	stateTracker.mu.Lock()
+	stateTracker.states["test-degrade-to-error"] = "degraded"
+	stateTracker.mu.Unlock()
+
+	maybeAlert("test-degrade-to-error", "error", "now truly broken")
+
+	if len(mock.messages) != 1 {
+		t.Errorf("expected 1 alert on degraded→error transition, got %d", len(mock.messages))
+	}
+}
+
+func TestMaybeAlert_FirstCheckError_Fires(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	mock := &mockNotifier{}
+	SetAlertNotifier(mock)
+
+	// Remove any prior state to simulate a fresh provider.
+	stateTracker.mu.Lock()
+	delete(stateTracker.states, "brand-new-provider")
+	stateTracker.mu.Unlock()
+
+	maybeAlert("brand-new-provider", "error", "first check failed")
+
+	if len(mock.messages) != 1 {
+		t.Errorf("expected 1 alert on first-ever error, got %d", len(mock.messages))
+	}
+}
+
+func TestMaybeAlert_UpdatesStateTracker(t *testing.T) {
+	original := alertNotifier
+	defer func() { alertNotifier = original }()
+
+	SetAlertNotifier(notify.NewLogNotifier())
+
+	stateTracker.mu.Lock()
+	stateTracker.states["state-update-test"] = "ok"
+	stateTracker.mu.Unlock()
+
+	maybeAlert("state-update-test", "error", "broke")
+
+	stateTracker.mu.Lock()
+	got := stateTracker.states["state-update-test"]
+	stateTracker.mu.Unlock()
+
+	if got != "error" {
+		t.Errorf("stateTracker after maybeAlert = %q, want %q", got, "error")
+	}
+}

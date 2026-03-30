@@ -89,3 +89,103 @@ func TestBotConfigDefaults_AutoExtractNotOverridden(t *testing.T) {
 		t.Error("defaults() must not set AutoExtract=true; boolField in loader owns that default")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Credentials map tests (hexagonal platform adapter migration)
+// ---------------------------------------------------------------------------
+
+func TestBotConfig_CredentialsMapPopulated(t *testing.T) {
+	t.Parallel()
+
+	cfg := &BotConfig{
+		SlackAppToken: "xapp-test",
+		SlackBotToken: "xoxb-test",
+	}
+	cfg.defaults()
+
+	if cfg.Credentials == nil {
+		t.Fatal("Credentials map is nil after defaults()")
+	}
+	if cfg.Credentials["app_token"] != "xapp-test" {
+		t.Errorf("Credentials[app_token] = %q, want %q", cfg.Credentials["app_token"], "xapp-test")
+	}
+	if cfg.Credentials["bot_token"] != "xoxb-test" {
+		t.Errorf("Credentials[bot_token] = %q, want %q", cfg.Credentials["bot_token"], "xoxb-test")
+	}
+}
+
+func TestBotConfig_CredentialsNotOverridden(t *testing.T) {
+	t.Parallel()
+
+	cfg := &BotConfig{
+		SlackAppToken: "xapp-old",
+		SlackBotToken: "xoxb-old",
+		Credentials: map[string]string{
+			"app_token": "xapp-explicit",
+			"bot_token": "xoxb-explicit",
+		},
+	}
+	cfg.defaults()
+
+	// Explicit Credentials must not be overridden by legacy fields.
+	if cfg.Credentials["app_token"] != "xapp-explicit" {
+		t.Errorf("Credentials[app_token] = %q, want %q (should not be overridden)",
+			cfg.Credentials["app_token"], "xapp-explicit")
+	}
+	if cfg.Credentials["bot_token"] != "xoxb-explicit" {
+		t.Errorf("Credentials[bot_token] = %q, want %q (should not be overridden)",
+			cfg.Credentials["bot_token"], "xoxb-explicit")
+	}
+}
+
+func TestBotConfig_EmptySlackTokensNoCredentials(t *testing.T) {
+	t.Parallel()
+
+	cfg := &BotConfig{Platform: "discord"}
+	cfg.defaults()
+
+	if cfg.Credentials == nil {
+		t.Fatal("Credentials map should be initialised even for non-Slack platforms")
+	}
+	if _, ok := cfg.Credentials["app_token"]; ok {
+		t.Error("empty SlackAppToken should not populate Credentials[app_token]")
+	}
+	if _, ok := cfg.Credentials["bot_token"]; ok {
+		t.Error("empty SlackBotToken should not populate Credentials[bot_token]")
+	}
+}
+
+func TestBotConfig_CredentialsInitialisedWhenNil(t *testing.T) {
+	t.Parallel()
+
+	cfg := &BotConfig{}
+	cfg.defaults()
+
+	if cfg.Credentials == nil {
+		t.Error("defaults() should initialise Credentials to a non-nil map")
+	}
+}
+
+func TestBotConfig_PartialCredentialsOnlyFillsMissing(t *testing.T) {
+	t.Parallel()
+
+	// Only app_token is pre-populated; bot_token should be filled from legacy field.
+	cfg := &BotConfig{
+		SlackAppToken: "xapp-legacy",
+		SlackBotToken: "xoxb-legacy",
+		Credentials: map[string]string{
+			"app_token": "xapp-explicit",
+			// bot_token is intentionally absent
+		},
+	}
+	cfg.defaults()
+
+	// Pre-set app_token must not be overridden.
+	if cfg.Credentials["app_token"] != "xapp-explicit" {
+		t.Errorf("Credentials[app_token] = %q, want %q", cfg.Credentials["app_token"], "xapp-explicit")
+	}
+	// Missing bot_token should be populated from SlackBotToken.
+	if cfg.Credentials["bot_token"] != "xoxb-legacy" {
+		t.Errorf("Credentials[bot_token] = %q, want %q (filled from SlackBotToken)", cfg.Credentials["bot_token"], "xoxb-legacy")
+	}
+}
