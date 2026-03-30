@@ -67,7 +67,7 @@ export async function GET() {
   }> = [];
   try {
     const rows = await prisma.credentialStatus.findMany();
-    llmProviders = rows.map((r) => ({
+    llmProviders = rows.map((r: typeof rows[number]) => ({
       provider: r.provider,
       status: r.status,
       error: r.error,

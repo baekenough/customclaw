@@ -32,6 +32,7 @@ jobs:
         working-directory: web-ui
         run: |
           npm ci
+          npx prisma generate
           npx tsc --noEmit
 
   build:

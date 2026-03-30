@@ -17,7 +17,7 @@ export async function GET() {
     const bots = await prisma.bot.findMany({
       orderBy: { createdAt: "desc" },
     });
-    const maskedBots = bots.map((bot) => ({
+    const maskedBots = bots.map((bot: typeof bots[number]) => ({
       ...bot,
       anthropicApiKey: maskApiKey(bot.anthropicApiKey),
       openaiApiKey: maskApiKey(bot.openaiApiKey),

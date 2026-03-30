@@ -326,8 +326,8 @@ export async function GET(request: NextRequest) {
 
     // Fetch any bot names not already loaded via usage logs
     const missingBotIds = botCallRows
-      .map((r) => r.bot_id)
-      .filter((id) => !botNameMap.has(id));
+      .map((r: BotCallRow) => r.bot_id)
+      .filter((id: string) => !botNameMap.has(id));
 
     if (missingBotIds.length > 0) {
       const bots = await prisma.bot.findMany({
@@ -339,7 +339,7 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    const botCalls = botCallRows.map((row) => ({
+    const botCalls = botCallRows.map((row: BotCallRow) => ({
       botId: row.bot_id,
       botName: botNameMap.get(row.bot_id) ?? row.bot_id,
       received: parseInt(row.received) || 0,
