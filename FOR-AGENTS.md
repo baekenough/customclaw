@@ -123,7 +123,7 @@ CustomClaw is a multi-tenant AI bot platform. The core pipeline:
 ```
 Platform (Slack/Discord/Mattermost)
   → platform adapter (slack_bolt/discord/mattermost)
-  → Redis Stream (customclaw:slack-messages)
+  → Redis Stream (customclaw:platform-messages)
   → worker.py (consumer group: customclaw-workers)
   → Claude CLI / Codex CLI subprocess
   → Platform response
@@ -174,7 +174,7 @@ End-to-end path for a user message (limited/tool-call mode):
 2. BotRunner (slack_adapter.py)
    - validates allowed_channels / allowed_users
    - adds hourglass reaction to message
-   - xadd → Redis Stream "customclaw:slack-messages"
+   - xadd → Redis Stream "customclaw:platform-messages"
        |
 3. worker.py picks up via xreadgroup (consumer group: customclaw-workers)
    - save_message(role=user) → PostgreSQL
@@ -262,7 +262,7 @@ docker compose logs -f worker --since 2m
 ## Architecture Quick Reference
 
 ```
-Slack → slack-bolt → Redis Stream → worker → Claude/Codex CLI → Slack response
+Platform → platform-adapter → Redis Stream → worker → Claude/Codex CLI → Platform response
                                   → analysis_worker → GitHub comments + Slack notifications
 
 PostgreSQL: messages, memories, bots, api_usage_logs
@@ -278,8 +278,8 @@ Web UI (Next.js): http://localhost:3000 — dashboard, bot management, monitorin
 
 | Aspect | Detail |
 |--------|--------|
-| Registry | GHCR (`ghcr.io/baekenough/customclaw-*`) |
-| Image naming | `customclaw-slack-bolt` (shared by slack-bolt, worker), `customclaw-web-ui`, `customclaw-airflow`, `customclaw-opensearch` |
+| Registry | AWS ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/`) |
+| Image naming | `customclaw/platform-adapter` (shared by platform-adapter, worker), `customclaw/web-ui`, `customclaw/airflow`, `customclaw/opensearch` |
 | Auto-update | Watchtower (nickfedor/watchtower fork) checks for new images daily at 4:00 AM |
 | Override pattern | `docker-compose.override.yml` for local development (build from source) |
 
@@ -296,7 +296,7 @@ Web UI (Next.js): http://localhost:3000 — dashboard, bot management, monitorin
 | `redis` | — | Message queue (internal) |
 | `opensearch` | — | Search engine (internal) |
 | `airflow` | 8080 | DAG orchestration |
-| `slack-bolt` | — | Slack event listener |
+| `platform-adapter` | — | Platform event listener |
 | `worker` | — | Message processor (Claude/Codex CLI) |
 | `web-ui` | 3000 | Dashboard |
 

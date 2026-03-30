@@ -1,6 +1,6 @@
 // Package credprobe periodically checks LLM provider credentials and stores
-// results in the credential_status PostgreSQL table. It sends Slack alerts on
-// ok→error transitions.
+// results in the credential_status PostgreSQL table. It sends alerts on
+// ok→error transitions via the configured Notifier.
 package credprobe
 
 import (
@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/baekenough/customclaw/internal/notify"
 )
 
 const (
@@ -25,6 +27,16 @@ const (
 	httpTimeout         = 10 * time.Second
 	probeInterval       = 30 * time.Minute
 )
+
+// alertNotifier is the notification backend used for credential alerts.
+// Defaults to LogNotifier; override with SetAlertNotifier before Start.
+var alertNotifier notify.Notifier = notify.NewLogNotifier()
+
+// SetAlertNotifier configures the notification backend for credential alerts.
+// Must be called before Start; not safe for concurrent use after Start.
+func SetAlertNotifier(n notify.Notifier) {
+	alertNotifier = n
+}
 
 // stateTracker guards the previous-status map used for alert deduplication.
 var stateTracker = struct {
@@ -277,10 +289,10 @@ func saveStatus(ctx context.Context, pool *pgxpool.Pool, provider, status, errMs
 }
 
 // ---------------------------------------------------------------------------
-// Slack alerting
+// Alerting
 // ---------------------------------------------------------------------------
 
-// maybeAlert sends a Slack alert when a provider transitions into an error state.
+// maybeAlert sends an alert when a provider transitions into an error state.
 // It fires on the first "error" result (no prior state) or on a non-error→error transition.
 func maybeAlert(provider, status, errMsg string) {
 	stateTracker.mu.Lock()
@@ -289,63 +301,20 @@ func maybeAlert(provider, status, errMsg string) {
 	stateTracker.mu.Unlock()
 
 	if status == "error" && previous != "error" {
-		sendSlackAlert(provider, errMsg)
+		sendAlert(provider, errMsg)
 	}
 }
 
-// sendSlackAlert posts an alert message to the configured Slack channel.
-func sendSlackAlert(provider, errMsg string) {
-	token := os.Getenv("CUSTOMCLAW_SLACK_BOT_TOKEN")
-	if token == "" {
-		slog.Warn("credential probe: CUSTOMCLAW_SLACK_BOT_TOKEN not set; skipping Slack alert")
-		return
-	}
-	channel := os.Getenv("CREDENTIAL_ALERT_CHANNEL")
-	if channel == "" {
-		channel = defaultAlertChannel
-	}
-
+// sendAlert posts an alert message via the configured alertNotifier.
+func sendAlert(provider, errMsg string) {
 	text := fmt.Sprintf(
 		"\u26a0\ufe0f *LLM Credential Alert*\n%s 인증 실패: %s\n서버에서 credential 갱신이 필요합니다.",
 		provider, errMsg,
 	)
-
-	payload, err := json.Marshal(map[string]string{
-		"channel": channel,
-		"text":    text,
-	})
-	if err != nil {
-		slog.Error("credential probe: failed to marshal Slack payload", "error", err)
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), httpTimeout)
 	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://slack.com/api/chat.postMessage",
-		bytes.NewReader(payload))
-	if err != nil {
-		slog.Error("credential probe: failed to create Slack request", "error", err)
-		return
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		slog.Error("credential probe: Slack API request failed", "error", err)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	var result map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		slog.Error("credential probe: failed to parse Slack response", "error", err)
-		return
-	}
-	if ok, _ := result["ok"].(bool); !ok {
-		slackErr, _ := result["error"].(string)
-		slog.Error("credential probe: Slack alert failed", "slack_error", slackErr)
+	if _, err := alertNotifier.SendMessage(ctx, "", text, ""); err != nil {
+		slog.Error("credential probe: alert failed", "error", err)
 	}
 }
 

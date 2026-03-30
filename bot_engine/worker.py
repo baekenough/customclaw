@@ -47,7 +47,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-STREAM_KEY = "customclaw:slack-messages"
+STREAM_KEY = "customclaw:platform-messages"
 CONSUMER_GROUP = os.environ.get("REDIS_CONSUMER_GROUP", "customclaw-workers")
 
 # Module-level cache for response publishers (keyed by "platform:bot_id").

@@ -9,6 +9,9 @@ from typing import Any
 
 _log = logging.getLogger(__name__)
 
+# Canonical Redis Stream key for all platform messages.
+PLATFORM_STREAM_KEY = "customclaw:platform-messages"
+
 
 @dataclass
 class MessageEvent:

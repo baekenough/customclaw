@@ -68,10 +68,10 @@ class DiscordConfig:
 
 @dataclass
 class BotConfig:
-    id: str
-    name: str
-    slack_app_token: str
-    slack_bot_token: str
+    id: str = ""
+    name: str = ""
+    slack_app_token: str = ""
+    slack_bot_token: str = ""
     platform: str = "slack"
     mattermost: MattermostConfig = field(default_factory=MattermostConfig)
     discord: DiscordConfig = field(default_factory=DiscordConfig)

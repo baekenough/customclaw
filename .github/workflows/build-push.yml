@@ -16,8 +16,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - service: slack-bolt
-            dockerfile: docker/slack-bolt/Dockerfile
+          - service: platform-adapter
+            dockerfile: docker/platform-adapter/Dockerfile
             context: "."
           - service: web-ui
             dockerfile: docker/web-ui/Dockerfile

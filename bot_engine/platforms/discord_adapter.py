@@ -23,7 +23,7 @@ from bot_engine.platforms.base import PlatformAdapter, ResponsePublisher
 
 log = logging.getLogger(__name__)
 
-_STREAM_KEY = "customclaw:slack-messages"
+_STREAM_KEY = "customclaw:platform-messages"
 _HOURGLASS = "hourglass_flowing_sand"
 
 # Map common emoji names used across platforms to Discord Unicode characters.

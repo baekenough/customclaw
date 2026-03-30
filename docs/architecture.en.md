@@ -88,9 +88,7 @@ For each eligible message the adapter:
 - Filters by `allowed_channels` and `allowed_users` from `SecurityConfig`.
 - Supports `mention_only` mode (Discord bots: only respond when @mentioned).
 - Adds an `hourglass_flowing_sand` emoji reaction to the source message.
-- Publishes the event (bot_id, channel_id, thread_ts, user_id, text, message_ts, bot_token) to Redis Stream key `customclaw:slack-messages` via `xadd`.
-
-> **Note:** The stream key `customclaw:slack-messages` retains its historical name. It will be renamed to a platform-neutral key in Phase 4.
+- Publishes the event (bot_id, channel_id, thread_ts, user_id, text, message_ts, bot_token) to Redis Stream key `customclaw:platform-messages` via `xadd`.
 
 <p align="center"><img src="../assets/diagrams/03-worker-consumer.png" width="800" /></p>
 
@@ -424,7 +422,7 @@ sequenceDiagram
 
 **Step-by-step summary:**
 
-1. User sends a message via Discord or Slack. The platform adapter validates channel/user, adds hourglass reaction, and publishes to Redis Stream (`customclaw:slack-messages`).
+1. User sends a message via Discord or Slack. The platform adapter validates channel/user, adds hourglass reaction, and publishes to Redis Stream (`customclaw:platform-messages`).
 2. Go worker picks up the message via `xreadgroup` from consumer group `customclaw-workers`. The `Dispatcher` routes it to a per-key goroutine for serial processing.
 3. User message saved to `messages` table. Recent thread/channel history loaded for context window.
 4. OpenSearch queried for relevant long-term memories using hybrid BM25 keyword + kNN vector search (with multi-tier cache).
@@ -540,11 +538,11 @@ All custom images are hosted on Amazon ECR: `849376369259.dkr.ecr.ap-northeast-2
 
 | Service | Profile | Image | Purpose |
 |---------|---------|-------|---------|
-| `slack-bolt` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Slack/Discord platform adapter |
-| `worker` | `legacy` | `customclaw/slack-bolt:develop` (ECR) | Deprecated Python worker |
-| `claude-analyzer` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Docs drift analysis — Claude CLI |
-| `codex-analyzer` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Docs drift analysis — Codex CLI |
-| `gemini-analyzer` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Docs drift analysis — Gemini CLI |
+| `platform-adapter` | `slack` | `customclaw/platform-adapter:develop` (ECR) | Platform adapter — Slack/Discord (renamed from slack-bolt in v1.0.0) |
+| `worker` | `legacy` | `customclaw/platform-adapter:develop` (ECR) | Deprecated Python worker |
+| `claude-analyzer` | `slack` | `customclaw/platform-adapter:develop` (ECR) | Docs drift analysis — Claude CLI |
+| `codex-analyzer` | `slack` | `customclaw/platform-adapter:develop` (ECR) | Docs drift analysis — Codex CLI |
+| `gemini-analyzer` | `slack` | `customclaw/platform-adapter:develop` (ECR) | Docs drift analysis — Gemini CLI |
 | `watchtower` | `auto-update` | `nickfedor/watchtower` | Auto-update via Docker labels |
 
 Total: 6 active + 6 profiled services.
@@ -560,7 +558,7 @@ The three analyzer services consume from dedicated Redis Streams (`customclaw:cl
 | `pgdata` | postgres | PostgreSQL data files |
 | `osdata` | opensearch | OpenSearch index data |
 | `redisdata` | redis | Redis AOF persistence |
-| `repos` | airflow, slack-bolt, worker | Cloned git repositories (shared) |
+| `repos` | airflow, platform-adapter, worker | Cloned git repositories (shared) |
 
 ### 6.3 Host Bind Mounts (Worker)
 
@@ -588,7 +586,7 @@ OpenSearch security plugin is disabled (`plugins.security.disabled=true`) for in
 | airflow | `curl http://localhost:8080/` | 30s | 3 (30s start delay) |
 | go-worker | `kill -0 1` (process alive) | 30s | 3 |
 | web-ui | `node fetch http://localhost:3000` | 30s | 3 (30s start delay) |
-| slack-bolt | Redis TCP connectivity | 30s | 3 |
+| platform-adapter | Redis TCP connectivity | 30s | 3 |
 | claude/codex/gemini-analyzer | Redis TCP connectivity | 30s | 3 |
 
 `go-worker` and `web-ui` wait for `postgres` and `redis` health conditions before starting. `go-worker` additionally waits for `opensearch`.
@@ -600,9 +598,9 @@ Selected environment variables required across services:
 | Variable | Service | Description |
 |----------|---------|-------------|
 | `OPENSEARCH_ADMIN_PASSWORD` | opensearch | Initial admin password for OpenSearch |
-| `ENCRYPTION_KEY` | slack-bolt, worker | Application-level bot token encryption key |
+| `ENCRYPTION_KEY` | platform-adapter, worker | Application-level bot token encryption key |
 | `DATABASE_URL` | worker, web-ui | PostgreSQL connection string |
-| `REDIS_URL` | worker, slack-bolt | Redis connection string |
+| `REDIS_URL` | worker, platform-adapter | Redis connection string |
 
 ---
 
@@ -621,12 +619,12 @@ Selected environment variables required across services:
 
 ### 7.2 External Connectivity
 
-- **Discord (primary):** The Go worker's `DiscordResponsePublisher` and the `slack-bolt` Discord adapter connect to the Discord Gateway (`discord.com`) via WebSocket. The Discord adapter supports `mention_only` mode.
-- **Slack (optional):** When the `slack` profile is active, `slack-bolt` maintains a persistent outbound WebSocket connection to `api.slack.com` using Socket Mode — no inbound port required.
+- **Discord (primary):** The Go worker's `DiscordResponsePublisher` and the `platform-adapter` Discord adapter connect to the Discord Gateway (`discord.com`) via WebSocket. The Discord adapter supports `mention_only` mode.
+- **Slack (optional):** When the `slack` profile is active, `platform-adapter` maintains a persistent outbound WebSocket connection to `api.slack.com` using Socket Mode — no inbound port required.
 - **GitHub:** Airflow DAGs communicate with `api.github.com` outbound; `omc_issue_analyzer` is triggered inbound via GitHub Actions → SSH → `airflow dags trigger`.
 - **Anthropic / OpenAI:** `go-worker` and Airflow DAGs call Claude CLI and Codex CLI as subprocesses; CLIs communicate with the respective APIs over HTTPS.
 - **Web UI:** Exposed publicly via Cloudflare Tunnel on port 3000 with TLS termination at Cloudflare.
 
 ### 7.3 Secrets Management
 
-Secrets are supplied via `.env` file loaded by Docker Compose. Bot YAML configs reference environment variables using `${VAR_NAME}` syntax resolved at runtime by `config/loader.py`. The `ENCRYPTION_KEY` environment variable is available to `slack-bolt` and `worker` for application-level token encryption.
+Secrets are supplied via `.env` file loaded by Docker Compose. Bot YAML configs reference environment variables using `${VAR_NAME}` syntax resolved at runtime by `config/loader.py`. The `ENCRYPTION_KEY` environment variable is available to `platform-adapter` and `worker` for application-level token encryption.

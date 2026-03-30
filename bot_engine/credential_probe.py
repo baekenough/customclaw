@@ -1,7 +1,7 @@
 """LLM provider credential health probe.
 
 Runs as a daemon thread, periodically checking all LLM provider credentials
-and storing results in PostgreSQL. Sends Slack alerts on failure transitions.
+and storing results in PostgreSQL. Sends alerts on failure transitions.
 """
 
 import json
@@ -14,6 +14,8 @@ from typing import Optional
 
 import psycopg2
 import requests
+
+from bot_engine.notify import create_backend, NotifyBackend
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +35,21 @@ _DEFAULT_CONTAINER_HOME = "/home/appuser"
 # Track previous states to detect ok → error transitions
 _previous_states: dict[str, str] = {}
 _states_lock = threading.Lock()
+
+_alert_backend: NotifyBackend | None = None
+
+
+def _get_alert_backend() -> NotifyBackend:
+    global _alert_backend
+    if _alert_backend is None:
+        token = os.environ.get(_ENV_SLACK_TOKEN, "")
+        channel = os.environ.get(_ENV_ALERT_CHANNEL, _DEFAULT_ALERT_CHANNEL)
+        _alert_backend = create_backend(
+            token=token,
+            channel=channel,
+            platform="slack" if token else "log",
+        )
+    return _alert_backend
 
 
 # ---------------------------------------------------------------------------
@@ -199,48 +216,23 @@ def _save_status(provider: str, status: str, error: Optional[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Slack alerting
+# Alerting
 # ---------------------------------------------------------------------------
 
 
-def _send_slack_alert(provider: str, error: Optional[str]) -> None:
-    """Send a Slack alert for a credential failure.
-
-    Args:
-        provider: The provider that failed.
-        error: The error message to include.
-    """
-    token = os.environ.get(_ENV_SLACK_TOKEN)
-    if not token:
-        log.warning("CUSTOMCLAW_SLACK_BOT_TOKEN not set; skipping Slack alert")
-        return
-
-    channel = os.environ.get(_ENV_ALERT_CHANNEL, _DEFAULT_ALERT_CHANNEL)
+def _send_alert(provider: str, error: Optional[str]) -> None:
+    """Send an alert for a credential failure via the configured backend."""
     text = (
         f"\u26a0\ufe0f *LLM Credential Alert*\n"
-        f"{provider} \uc778\uc99d \uc2e4\ud328: {error}\n"
-        f"\uc11c\ubc84\uc5d0\uc11c credential \uac31\uc2e0\uc774 \ud544\uc694\ud569\ub2c8\ub2e4."
+        f"{provider} 인증 실패: {error}\n"
+        f"서버에서 credential 갱신이 필요합니다."
     )
-
-    try:
-        response = requests.post(
-            "https://slack.com/api/chat.postMessage",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json={"channel": channel, "text": text},
-            timeout=10,
-        )
-        data = response.json()
-        if not data.get("ok"):
-            log.error("Slack alert failed: %s", data.get("error", response.text))
-    except Exception as exc:
-        log.error("Failed to send Slack alert: %s", exc)
+    backend = _get_alert_backend()
+    backend.send_message(channel="", text=text)  # uses default channel
 
 
 def _maybe_alert(provider: str, status: str, error: Optional[str]) -> None:
-    """Send a Slack alert only when transitioning into an error state.
+    """Send an alert only when transitioning into an error state.
 
     Alerts fire on:
     - First check result is "error" (no previous state)
@@ -256,7 +248,7 @@ def _maybe_alert(provider: str, status: str, error: Optional[str]) -> None:
         _previous_states[provider] = status
 
     if status == "error" and previous != "error":
-        _send_slack_alert(provider, error)
+        _send_alert(provider, error)
 
 
 # ---------------------------------------------------------------------------

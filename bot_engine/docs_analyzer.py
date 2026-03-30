@@ -27,6 +27,8 @@ import time
 import redis
 import requests
 
+from bot_engine.notify import create_backend, NotifyBackend
+
 log = logging.getLogger(__name__)
 
 PENDING_IDLE_MS = int(os.environ.get("ANALYZER_PENDING_IDLE_MS", "60000"))
@@ -317,12 +319,27 @@ def _build_comment_body(
 
 
 # ---------------------------------------------------------------------------
-# Slack notification
+# Notification
 # ---------------------------------------------------------------------------
 
+_docs_notify_backend: NotifyBackend | None = None
 
-def _notify_slack(text: str, thread_ts: str = "") -> str:
-    """Send a best-effort notification to the configured Slack channel.
+
+def _get_docs_notify_backend() -> NotifyBackend:
+    global _docs_notify_backend
+    if _docs_notify_backend is None:
+        token = os.environ.get("SLACK_BOT_TOKEN", "")
+        channel = os.environ.get("SLACK_CHANNEL", "")
+        _docs_notify_backend = create_backend(
+            token=token,
+            channel=channel,
+            platform="slack" if token else "log",
+        )
+    return _docs_notify_backend
+
+
+def _notify(text: str, thread_ts: str = "") -> str:
+    """Send a best-effort notification via the configured backend.
 
     Returns the message timestamp for threading follow-up messages.
     Returns empty string on failure or when not configured.
@@ -331,28 +348,8 @@ def _notify_slack(text: str, thread_ts: str = "") -> str:
         text: Plain text message body.
         thread_ts: If provided, reply in this thread instead of top-level.
     """
-    bot_token = os.environ.get("SLACK_BOT_TOKEN", "")
-    channel = os.environ.get("SLACK_CHANNEL", "")
-    if not bot_token or not channel:
-        return ""
-
-    try:
-        from slack_sdk import WebClient  # noqa: PLC0415 — optional dependency
-
-        client = WebClient(token=bot_token)
-        kwargs: dict = {
-            "channel": channel,
-            "text": text,
-            "unfurl_links": False,
-        }
-        if thread_ts:
-            kwargs["thread_ts"] = thread_ts
-
-        resp = client.chat_postMessage(**kwargs)
-        return resp.get("ts", "") if resp.get("ok") else ""
-    except Exception as exc:
-        log.warning("Slack notification failed (non-blocking): %s", exc)
-        return ""
+    backend = _get_docs_notify_backend()
+    return backend.send_message(channel="", text=text, thread_ts=thread_ts)
 
 
 # ---------------------------------------------------------------------------
@@ -409,7 +406,7 @@ def _process_message(cli: str, request: dict) -> None:
     )
 
     # Step 1: Start notification
-    thread_ts = _notify_slack(
+    thread_ts = _notify(
         f"🔍 [{source_name}] 문서 변경 분석 시작 — Issue #{issue_number}\n"
         f"Analyzer: {cli}"
     )
@@ -427,7 +424,7 @@ def _process_message(cli: str, request: dict) -> None:
             repo,
             issue_number,
         )
-        _notify_slack(
+        _notify(
             f"❌ [{source_name}] 분석 실패 — Issue #{issue_number}\n"
             f"Analyzer: {cli}",
             thread_ts=thread_ts,
@@ -442,7 +439,7 @@ def _process_message(cli: str, request: dict) -> None:
         log.warning("repo or issue_number missing; skipping GitHub comment")
 
     # Step 4: Completion notification
-    _notify_slack(
+    _notify(
         f"✅ [{source_name}] 문서 변경 분석 완료 — Issue #{issue_number}",
         thread_ts=thread_ts,
     )

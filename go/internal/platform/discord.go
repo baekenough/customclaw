@@ -16,7 +16,7 @@ import (
 // discordStreamKey is the Redis Stream used for all incoming Discord messages.
 // Intentionally the same key as Slack so the worker layer can consume from one
 // stream regardless of platform.
-const discordStreamKey = "customclaw:slack-messages"
+const discordStreamKey = "customclaw:platform-messages"
 
 // DiscordAdapter listens for Discord messages via the Gateway API and publishes
 // them to the Redis Stream for downstream processing.
