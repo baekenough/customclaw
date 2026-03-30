@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -169,3 +172,55 @@ class ResponsePublisher(ABC):
             List of reply dicts, each with keys ``user_id``, ``text``,
             and ``ts`` (platform timestamp / message ID).
         """
+
+
+class NoOpResponsePublisher(ResponsePublisher):
+    """No-op publisher for unsupported or unavailable platforms.
+
+    Logs a warning for every call but never raises, ensuring the worker
+    pipeline degrades gracefully when a platform adapter is missing.
+    """
+
+    def __init__(self, platform: str = "unknown") -> None:
+        self._platform = platform
+
+    def send_message(
+        self,
+        channel_id: str,
+        text: str,
+        thread_id: str | None = None,
+    ) -> str:
+        _log.warning(
+            "NoOp send_message: platform=%s channel=%s (message dropped)",
+            self._platform,
+            channel_id,
+        )
+        return ""
+
+    def add_reaction(
+        self,
+        channel_id: str,
+        message_id: str,
+        emoji: str,
+    ) -> None:
+        _log.warning(
+            "NoOp add_reaction: platform=%s channel=%s",
+            self._platform,
+            channel_id,
+        )
+
+    def remove_reaction(
+        self,
+        channel_id: str,
+        message_id: str,
+        emoji: str,
+    ) -> None:
+        pass
+
+    def get_thread_replies(
+        self,
+        channel_id: str,
+        thread_id: str,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        return []

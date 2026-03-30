@@ -12,11 +12,16 @@ import redis
 
 from bot_engine.config.loader import BotConfig, load_all_bots
 from bot_engine.platforms.base import PlatformAdapter
-from bot_engine.platforms.slack_adapter import SlackAdapter
 from bot_engine.runtime_control import (
     consume_restart_request,
     is_supervised_runtime,
 )
+
+try:
+    from bot_engine.platforms.slack_adapter import SlackAdapter
+    _HAS_SLACK = True
+except ImportError:
+    _HAS_SLACK = False
 
 try:
     from bot_engine.platforms.mattermost_adapter import MattermostAdapter
@@ -75,9 +80,23 @@ class BotManager:
 
         # Build Slack adapters (group by app_token to share Socket Mode connections)
         if slack_configs:
-            self._adapters.extend(
-                self._build_slack_adapters(slack_configs)
-            )
+            if not _HAS_SLACK:
+                log.error(
+                    "slack-bolt is not installed; skipping %d Slack "
+                    "bot(s).  Install it with: pip install slack-bolt",
+                    len(slack_configs),
+                )
+            else:
+                try:
+                    self._adapters.extend(
+                        self._build_slack_adapters(slack_configs)
+                    )
+                except Exception:
+                    log.exception(
+                        "Failed to initialise Slack adapter(s) for %d bot(s); "
+                        "skipping Slack platform",
+                        len(slack_configs),
+                    )
 
         # Build Mattermost adapters
         if mm_configs:
@@ -88,13 +107,18 @@ class BotManager:
                     len(mm_configs),
                 )
             else:
-                adapter = MattermostAdapter(mm_configs, self.redis_client)
-                self._adapters.append(adapter)
-                log.info(
-                    "Initialised MattermostAdapter for %d bot(s): %s",
-                    len(mm_configs),
-                    [c.id for c in mm_configs],
-                )
+                try:
+                    adapter = MattermostAdapter(mm_configs, self.redis_client)
+                    self._adapters.append(adapter)
+                    log.info(
+                        "Initialised MattermostAdapter for %d bot(s): %s",
+                        len(mm_configs),
+                        [c.id for c in mm_configs],
+                    )
+                except Exception:
+                    log.exception(
+                        "Failed to initialise Mattermost adapter; skipping",
+                    )
 
         # Build Discord adapters
         if discord_configs:
@@ -105,13 +129,18 @@ class BotManager:
                     len(discord_configs),
                 )
             else:
-                adapter = DiscordAdapter(discord_configs, self.redis_client)
-                self._adapters.append(adapter)
-                log.info(
-                    "Initialised DiscordAdapter for %d bot(s): %s",
-                    len(discord_configs),
-                    [c.id for c in discord_configs],
-                )
+                try:
+                    adapter = DiscordAdapter(discord_configs, self.redis_client)
+                    self._adapters.append(adapter)
+                    log.info(
+                        "Initialised DiscordAdapter for %d bot(s): %s",
+                        len(discord_configs),
+                        [c.id for c in discord_configs],
+                    )
+                except Exception:
+                    log.exception(
+                        "Failed to initialise Discord adapter; skipping",
+                    )
 
     def _build_slack_adapters(
         self, configs: list[BotConfig]

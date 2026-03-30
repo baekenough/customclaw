@@ -462,3 +462,14 @@ class MattermostResponsePublisher(ResponsePublisher):
             for post_id in order[-limit:]
             if post_id in posts
         ]
+
+
+# ── Auto-register with PlatformRegistry ──────────────────────────
+from bot_engine.platforms.registry import PlatformRegistry  # noqa: E402
+
+PlatformRegistry.register(
+    "mattermost",
+    publisher_factory=lambda token, url="", port=443, **kw: MattermostResponsePublisher(
+        token=token, url=url, port=port,
+    ),
+)

@@ -19,7 +19,8 @@ import requests
 
 from bot_engine.config.loader import load_all_bots, BotConfig
 from bot_engine.platforms.base import ResponsePublisher
-from bot_engine.platforms.slack_adapter import SlackResponsePublisher
+from bot_engine.platforms.base import NoOpResponsePublisher
+from bot_engine.platforms.registry import PlatformRegistry
 from bot_engine.memory.extractor import MemoryExtractor
 from bot_engine.memory.search import HybridSearch
 from bot_engine.memory.store import MessageStore
@@ -65,36 +66,45 @@ MERGE_WINDOW = int(os.environ.get("MERGE_WINDOW_SECONDS", "30"))
 def _get_publisher(msg_data: dict, bots: dict) -> ResponsePublisher:
     """Return a cached ResponsePublisher for the message's platform and bot.
 
-    For Mattermost, the publisher performs a ``driver.login()`` on first
-    creation.  Caching avoids repeating that HTTP round-trip for every
-    message.
+    Uses PlatformRegistry for platform lookup with NoOp fallback.
+    Legacy Slack/Mattermost/Discord direct creation is preserved for
+    backward compatibility with messages already in the stream.
     """
-    platform = msg_data.get("platform", "slack")
+    platform = msg_data.get("platform")
+    if not platform:
+        log.warning("message missing 'platform' field, using NoOp publisher")
+        return NoOpResponsePublisher(platform="unknown")
+
     bot_id = msg_data.get("bot_id", "")
     cache_key = f"{platform}:{bot_id}"
 
     if cache_key in _publisher_cache:
         return _publisher_cache[cache_key]
 
-    if platform == "mattermost":
-        from bot_engine.platforms.mattermost_adapter import MattermostResponsePublisher  # noqa: PLC0415
+    # Try registry first (preferred path)
+    if PlatformRegistry.has_publisher(platform):
+        bot_token = msg_data.get("bot_token", "")
         config = bots.get(bot_id)
-        if config and hasattr(config, "mattermost"):
-            publisher: ResponsePublisher = MattermostResponsePublisher(
+        publisher: ResponsePublisher
+
+        if platform == "mattermost" and config and hasattr(config, "mattermost"):
+            publisher = PlatformRegistry.get_publisher(
+                platform,
                 token=config.mattermost.token,
                 url=config.mattermost.url,
                 port=config.mattermost.port,
             )
-        else:
-            publisher = MattermostResponsePublisher(
-                token=msg_data.get("bot_token", ""),
-                url=msg_data.get("platform_url", ""),
+        elif platform == "discord":
+            publisher = PlatformRegistry.get_publisher(
+                platform, bot_token=bot_token,
             )
-    elif platform == "discord":
-        from bot_engine.platforms.discord_adapter import DiscordResponsePublisher  # noqa: PLC0415
-        publisher = DiscordResponsePublisher(bot_token=msg_data.get("bot_token", ""))
+        else:
+            publisher = PlatformRegistry.get_publisher(
+                platform, bot_token=bot_token,
+            )
     else:
-        publisher = SlackResponsePublisher(bot_token=msg_data.get("bot_token", ""))
+        log.warning("no publisher registered for platform=%s, using NoOp", platform)
+        publisher = NoOpResponsePublisher(platform=platform)
 
     _publisher_cache[cache_key] = publisher
     return publisher

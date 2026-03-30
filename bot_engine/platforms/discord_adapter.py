@@ -791,3 +791,12 @@ def _parse_retry_after(resp: requests.Response) -> float:
         pass
 
     return _RETRY_BACKOFF_BASE
+
+
+# ── Auto-register with PlatformRegistry ──────────────────────────
+from bot_engine.platforms.registry import PlatformRegistry  # noqa: E402
+
+PlatformRegistry.register(
+    "discord",
+    publisher_factory=lambda bot_token, **kw: DiscordResponsePublisher(bot_token=bot_token),
+)

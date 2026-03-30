@@ -325,3 +325,12 @@ class SlackResponsePublisher(ResponsePublisher):
             }
             for msg in response.get("messages", [])
         ]
+
+
+# ── Auto-register with PlatformRegistry ──────────────────────────
+from bot_engine.platforms.registry import PlatformRegistry  # noqa: E402
+
+PlatformRegistry.register(
+    "slack",
+    publisher_factory=lambda bot_token, **kw: SlackResponsePublisher(bot_token=bot_token),
+)
