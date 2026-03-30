@@ -9,7 +9,7 @@ RUN npm install -g \
     && npm install -g @google/gemini-cli 2>/dev/null || true \
     && npm cache clean --force
 
-COPY entrypoint.sh /entrypoint.sh
+COPY docker/cli-keeper/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Credential directories — created here so bind-mount ownership is predictable
