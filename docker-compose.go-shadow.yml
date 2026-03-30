@@ -1,15 +1,11 @@
-# Go worker shadow mode — runs alongside Python worker on same consumer group.
+# Go worker — primary production worker.
 #
 # Usage:
 #   docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml up -d go-worker
 #
-# Both Python and Go workers share the "customclaw-workers" consumer group,
-# so Redis automatically distributes messages between them.
-# Monitor logs to compare behavior before full cutover.
-#
-# Full cutover (replace Python worker):
-#   docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml up -d go-worker
-#   docker compose stop worker
+# The Go worker is the primary message processor. It consumes from the
+# "customclaw-workers" Redis consumer group. The Python worker is deprecated
+# and moved to profiles: [legacy] in docker-compose.yml.
 
 services:
   go-worker:
@@ -61,6 +57,12 @@ services:
       MAX_CONCURRENT_WORKERS: "5"
       MERGE_WINDOW_SECONDS: "5"
     entrypoint: ["worker"]
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep worker || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
   go-app:
     build:
