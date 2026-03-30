@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Get list of staged files
+STAGED=$(git diff --cached --name-only --diff-filter=ACM)
+
+# ── Go checks ──────────────────────────────────────────────
+if echo "$STAGED" | grep -q '^go/'; then
+    echo "🔍 Go files changed — running build + vet..."
+    (cd go && go build ./... && go vet ./...) || {
+        echo "❌ Go build/vet failed. Fix errors before committing."
+        exit 1
+    }
+    echo "✓ Go checks passed"
+fi
+
+# ── Web-UI checks ─────────────────────────────────────────
+if echo "$STAGED" | grep -qE '^web-ui/|^prisma/'; then
+    echo "🔍 Web-UI files changed — running type check..."
+    (cd web-ui && npx prisma generate --no-hints 2>/dev/null && npx tsc --noEmit) || {
+        echo "❌ TypeScript type check failed. Fix errors before committing."
+        exit 1
+    }
+    echo "✓ TypeScript checks passed"
+fi
