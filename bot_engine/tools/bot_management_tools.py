@@ -428,7 +428,7 @@ class DeleteBotTool(BaseTool):
         return ToolDefinition(
             name="delete_bot",
             description=(
-                "Deactivate (soft-delete) a bot. The bot will disconnect from Slack."
+                "Deactivate (soft-delete) a bot. The bot will stop responding on its platform."
             ),
             input_schema={
                 "type": "object",

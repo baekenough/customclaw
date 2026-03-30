@@ -46,8 +46,13 @@ type CreateBotTool struct{}
 
 func (t *CreateBotTool) Definition() ToolDefinition {
 	return ToolDefinition{
-		Name:        "create_bot",
-		Description: "Create a new bot and register it in the system.",
+		Name: "create_bot",
+		Description: "Create a new bot and register it in the system. " +
+			"Supports Slack, Discord, and Mattermost. " +
+			"Provide the platform and credentials dict for the chosen platform. " +
+			"Slack: credentials must include app_token (xapp-...) and bot_token (xoxb-...). " +
+			"Mattermost: credentials must include url and token. " +
+			"Discord: credentials must include token.",
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -61,15 +66,22 @@ func (t *CreateBotTool) Definition() ToolDefinition {
 				},
 				"platform": map[string]any{
 					"type":        "string",
-					"description": "Platform: slack, discord, or mattermost",
+					"description": "Target platform for the bot",
 					"enum":        []string{"slack", "discord", "mattermost"},
+				},
+				"credentials": map[string]any{
+					"type": "object",
+					"description": "Platform credentials. " +
+						"Slack: {app_token, bot_token}. " +
+						"Mattermost: {url, token, port?}. " +
+						"Discord: {token, guild_id?}.",
 				},
 				"personality": map[string]any{
 					"type":        "string",
 					"description": "Bot personality description for the LLM",
 				},
 			},
-			"required": []string{"id", "name"},
+			"required": []string{"id", "name", "platform"},
 		},
 	}
 }
@@ -86,9 +98,15 @@ func (t *CreateBotTool) ExecuteWithContext(ctx context.Context, args map[string]
 	}
 	platform, _ := args["platform"].(string)
 	if platform == "" {
-		platform = "slack"
+		return ToolResult{IsError: true, Content: "platform is required (slack, discord, or mattermost)"}
 	}
 	personality, _ := args["personality"].(string)
+
+	credentials, _ := args["credentials"].(map[string]any)
+	if credentials == nil {
+		credentials = map[string]any{}
+	}
+	credentialsJSON, _ := json.Marshal(credentials)
 
 	conn, err := dbConnect(ctx)
 	if err != nil {
@@ -96,18 +114,18 @@ func (t *CreateBotTool) ExecuteWithContext(ctx context.Context, args map[string]
 	}
 	defer func() { _ = conn.Close(ctx) }()
 
-	config := map[string]any{
+	botConfig := map[string]any{
 		"id":       id,
 		"name":     name,
 		"platform": platform,
 		"persona":  map[string]any{"personality": personality},
 	}
-	configJSON, _ := json.Marshal(config)
+	configJSON, _ := json.Marshal(botConfig)
 
 	_, err = conn.Exec(ctx,
-		`INSERT INTO bots (id, name, platform, config, is_active, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, true, $5, $5)`,
-		id, name, platform, string(configJSON), time.Now().UTC(),
+		`INSERT INTO bots (id, name, platform, credentials, config, is_active, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, true, $6, $6)`,
+		id, name, platform, string(credentialsJSON), string(configJSON), time.Now().UTC(),
 	)
 	if err != nil {
 		return ToolResult{IsError: true, Content: fmt.Sprintf("insert bot: %v", err)}
