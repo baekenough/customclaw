@@ -5,16 +5,12 @@ on:
     branches: [main, develop]
     tags: ["v*"]
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: baekenough/customclaw
-
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      id-token: write
 
     strategy:
       fail-fast: false
@@ -32,6 +28,9 @@ jobs:
           - service: opensearch
             dockerfile: docker/opensearch/Dockerfile
             context: docker/opensearch
+          - service: go-worker
+            dockerfile: go/Dockerfile
+            context: go
 
     steps:
       - name: Checkout repository
@@ -40,25 +39,38 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}-${{ matrix.service }}
-          tags: |
-            type=sha,prefix=
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=develop,enable=${{ github.ref == 'refs/heads/develop' }}
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Determine image tags
+        id: tags
+        run: |
+          ECR_REGISTRY="${{ steps.ecr-login.outputs.registry }}"
+          IMAGE="${ECR_REGISTRY}/customclaw/${{ matrix.service }}"
+          SHA_SHORT=$(echo "${{ github.sha }}" | cut -c1-7)
+          TAGS="${IMAGE}:${SHA_SHORT}"
+
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            TAGS="${TAGS},${IMAGE}:latest"
+          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            TAGS="${TAGS},${IMAGE}:develop"
+          fi
+
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+            TAGS="${TAGS},${IMAGE}:${VERSION}"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -66,7 +78,6 @@ jobs:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
