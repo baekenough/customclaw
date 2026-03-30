@@ -263,7 +263,7 @@ export async function GET(request: NextRequest) {
       } else {
         agg.set(key, {
           botId: log.botId,
-          botName: log.bot.name,
+          botName: log.bot?.name ?? log.botId,
           model: log.model,
           inputTokens: log.inputTokens,
           outputTokens: log.outputTokens,
@@ -319,7 +319,7 @@ export async function GET(request: NextRequest) {
     // ── Build botCalls with names from existing bot data ────────
     const botNameMap = new Map<string, string>();
     for (const log of logs) {
-      if (!botNameMap.has(log.botId)) {
+      if (!botNameMap.has(log.botId) && log.bot) {
         botNameMap.set(log.botId, log.bot.name);
       }
     }
