@@ -18,7 +18,7 @@ services:
       - "5432:5432"
 
   opensearch:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/opensearch:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/opensearch:develop
     restart: unless-stopped
     environment:
       - discovery.type=single-node
@@ -47,7 +47,7 @@ services:
       retries: 5
 
   airflow:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/airflow:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/airflow:develop
     restart: unless-stopped
     group_add:
       - "988"   # docker group GID for docker.sock access
@@ -86,7 +86,7 @@ services:
       start_period: 30s
 
   slack-bolt:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 120s
@@ -115,7 +115,7 @@ services:
       start_period: 10s
 
   worker:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
     restart: unless-stopped
     profiles: [legacy]
     stop_grace_period: 120s
@@ -161,7 +161,7 @@ services:
     command: python -m bot_engine.worker
 
   web-ui:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/web-ui:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/web-ui:develop
     restart: unless-stopped
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -191,7 +191,7 @@ services:
       start_period: 30s
 
   claude-analyzer:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 30s
@@ -224,7 +224,7 @@ services:
       start_period: 10s
 
   codex-analyzer:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 30s
@@ -256,7 +256,7 @@ services:
       start_period: 10s
 
   gemini-analyzer:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:latest
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 30s
