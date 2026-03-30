@@ -20,7 +20,7 @@ const (
 
 	analysisReadBatch     = 5
 	analysisBlockDuration = 5 * time.Second
-	analysisPendingIdle   = time.Minute
+	analysisPendingIdle   = 10 * time.Minute
 	analysisClaimInterval = analysisPendingIdle / 2
 	analysisMaxConcurrent = 4
 )
