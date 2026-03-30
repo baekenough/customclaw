@@ -176,10 +176,15 @@ func run() error {
 
 	// Credential probe — periodically checks LLM provider credentials and
 	// stores results in the credential_status table. Fixes issue #32.
-	alertToken := os.Getenv("CUSTOMCLAW_SLACK_BOT_TOKEN")
-	alertChannel := os.Getenv("CREDENTIAL_ALERT_CHANNEL")
+	// Env var precedence: ALERT_BOT_TOKEN > CUSTOMCLAW_SLACK_BOT_TOKEN (legacy)
+	alertToken := os.Getenv("ALERT_BOT_TOKEN")
+	if alertToken == "" {
+		alertToken = os.Getenv("CUSTOMCLAW_SLACK_BOT_TOKEN") // legacy fallback
+	}
+	// Env var precedence: ALERT_CHANNEL > CREDENTIAL_ALERT_CHANNEL (legacy)
+	alertChannel := os.Getenv("ALERT_CHANNEL")
 	if alertChannel == "" {
-		alertChannel = "C0AMBNY135Z"
+		alertChannel = os.Getenv("CREDENTIAL_ALERT_CHANNEL") // legacy fallback
 	}
 	credprobe.SetAlertNotifier(notify.New(alertToken, alertChannel))
 	credprobe.Start(ctx, store.Pool())

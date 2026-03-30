@@ -23,9 +23,8 @@ import (
 )
 
 const (
-	defaultAlertChannel = "C0AMBNY135Z"
-	httpTimeout         = 10 * time.Second
-	probeInterval       = 30 * time.Minute
+	httpTimeout   = 10 * time.Second
+	probeInterval = 30 * time.Minute
 )
 
 // alertNotifier is the notification backend used for credential alerts.

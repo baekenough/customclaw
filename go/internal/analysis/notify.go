@@ -54,8 +54,11 @@ func loadBotInfo(ctx context.Context) botInfo {
 
 	var token string
 	var channels []string
+	// Query the platform-agnostic credentials column first; fall back to the
+	// legacy slack_bot_token column so existing rows keep working.
 	err = conn.QueryRow(ctx,
-		"SELECT slack_bot_token, channels FROM bots WHERE id = $1 AND is_active = true",
+		`SELECT COALESCE(credentials->>'bot_token', slack_bot_token, ''), channels
+		 FROM bots WHERE id = $1 AND is_active = true`,
 		botID,
 	).Scan(&token, &channels)
 	if err != nil {
@@ -71,10 +74,19 @@ func loadBotInfo(ctx context.Context) botInfo {
 }
 
 // envBotInfo returns bot info sourced from environment variables (fallback).
+// Prefers ALERT_BOT_TOKEN / ALERT_CHANNEL; falls back to legacy Slack-specific names.
 func envBotInfo() botInfo {
+	token := os.Getenv("ALERT_BOT_TOKEN")
+	if token == "" {
+		token = os.Getenv("SLACK_BOT_TOKEN") // legacy fallback
+	}
+	channel := os.Getenv("ALERT_CHANNEL")
+	if channel == "" {
+		channel = os.Getenv("SLACK_CHANNEL") // legacy fallback
+	}
 	return botInfo{
-		token:   os.Getenv("SLACK_BOT_TOKEN"),
-		channel: os.Getenv("SLACK_CHANNEL"),
+		token:   token,
+		channel: channel,
 	}
 }
 
