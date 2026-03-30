@@ -53,11 +53,11 @@ func run() error {
 		if cfg.Platform != "slack" {
 			continue
 		}
-		if cfg.SlackAppToken == "" || cfg.SlackBotToken == "" {
+		if cfg.Credentials["app_token"] == "" || cfg.Credentials["bot_token"] == "" {
 			slog.Warn("slack bot missing tokens, skipping", "bot_id", cfg.ID)
 			continue
 		}
-		slackByAppToken[cfg.SlackAppToken] = append(slackByAppToken[cfg.SlackAppToken], cfg)
+		slackByAppToken[cfg.Credentials["app_token"]] = append(slackByAppToken[cfg.Credentials["app_token"]], cfg)
 	}
 
 	// Group Discord configs by token so that bots sharing the same token
