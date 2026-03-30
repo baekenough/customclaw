@@ -46,6 +46,8 @@ services:
       CODEX_CONFIG_DIR: ${CONTAINER_HOME}/.codex
       # Claude OAuth
       CLAUDE_CREDENTIALS_PATH: ${CONTAINER_HOME}/.claude/.credentials.json
+      # Claude CLI binary (override .env host path with container path)
+      CLAUDE_CLI_PATH: /usr/local/bin/claude
       # Codex CLI
       CODEX_CLI_PATH: /usr/local/bin/codex
       # Gemini SDK
