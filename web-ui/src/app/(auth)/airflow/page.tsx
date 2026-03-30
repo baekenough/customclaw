@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Card,
   CardContent,
@@ -12,6 +12,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronDown,
   ChevronRight,
   Info,
@@ -58,6 +61,102 @@ interface ImportError {
   filename: string;
   stack_trace: string;
   timestamp: string;
+}
+
+// ── Sorting ──────────────────────────────────────────────────────────────────
+
+type SortKey = "status" | "name" | "last_run" | "schedule";
+type SortDir = "asc" | "desc";
+
+interface SortState {
+  key: SortKey;
+  dir: SortDir;
+}
+
+const STATUS_PRIORITY: Record<string, number> = {
+  failed: 0,
+  upstream_failed: 0,
+  running: 1,
+  queued: 2,
+  success: 3,
+};
+
+function getStatusPriority(state: string | undefined | null): number {
+  if (!state) return 4; // never run → bottom
+  return STATUS_PRIORITY[state] ?? 3;
+}
+
+function sortDags(dags: Dag[], sort: SortState): Dag[] {
+  return [...dags].sort((a, b) => {
+    let cmp = 0;
+    switch (sort.key) {
+      case "status": {
+        const pa = getStatusPriority(a.last_run_state);
+        const pb = getStatusPriority(b.last_run_state);
+        cmp = pa - pb;
+        // Within same status, sort by last_run descending (most recent first)
+        if (cmp === 0) {
+          const ta = a.last_run ? new Date(a.last_run).getTime() : 0;
+          const tb = b.last_run ? new Date(b.last_run).getTime() : 0;
+          cmp = tb - ta;
+        }
+        break;
+      }
+      case "name":
+        cmp = a.dag_id.localeCompare(b.dag_id);
+        break;
+      case "last_run": {
+        const ta = a.last_run ? new Date(a.last_run).getTime() : 0;
+        const tb = b.last_run ? new Date(b.last_run).getTime() : 0;
+        cmp = tb - ta; // default: newest first
+        break;
+      }
+      case "schedule":
+        cmp = (a.schedule_interval ?? "").localeCompare(
+          b.schedule_interval ?? ""
+        );
+        break;
+    }
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+}
+
+// ── Sort Header Button ────────────────────────────────────────────────────────
+
+function SortHeaderBtn({
+  label,
+  sortKey,
+  current,
+  onSort,
+  className,
+}: {
+  label: string;
+  sortKey: SortKey;
+  current: SortState;
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const isActive = current.key === sortKey;
+  const Icon = isActive
+    ? current.dir === "asc"
+      ? ArrowUp
+      : ArrowDown
+    : ArrowUpDown;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      className={`inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors select-none ${className ?? ""}`}
+      aria-label={`${label} 기준 정렬`}
+    >
+      {label}
+      <Icon
+        className={`h-3 w-3 ${isActive ? "text-foreground" : "text-muted-foreground/50"}`}
+        aria-hidden="true"
+      />
+    </button>
+  );
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -476,7 +575,18 @@ export default function AirflowPage() {
   const [loading, setLoading] = useState(true);
   const [airflowError, setAirflowError] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(false);
+  const [sort, setSort] = useState<SortState>({ key: "status", dir: "asc" });
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const handleSort = useCallback((key: SortKey) => {
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" }
+    );
+  }, []);
+
+  const sortedDags = useMemo(() => sortDags(dags, sort), [dags, sort]);
 
   const fetchData = useCallback(() => {
     setLoading(true);
@@ -619,7 +729,41 @@ export default function AirflowPage() {
             </div>
           ) : (
             <div>
-              {dags.map((dag) => (
+              {/* Column sort headers */}
+              <div className="flex items-center gap-3 px-4 py-2 border-b border-border/20 bg-muted/5">
+                <span className="w-4 shrink-0" aria-hidden="true" />
+                <SortHeaderBtn
+                  label="이름"
+                  sortKey="name"
+                  current={sort}
+                  onSort={handleSort}
+                  className="flex-1 min-w-0 justify-start"
+                />
+                <span className="hidden sm:block w-16 shrink-0" />
+                <span className="hidden sm:block w-14 shrink-0" />
+                <SortHeaderBtn
+                  label="스케줄"
+                  sortKey="schedule"
+                  current={sort}
+                  onSort={handleSort}
+                  className="hidden sm:flex w-20 shrink-0 justify-end"
+                />
+                <SortHeaderBtn
+                  label="최근 실행"
+                  sortKey="last_run"
+                  current={sort}
+                  onSort={handleSort}
+                  className="hidden sm:flex w-14 shrink-0 justify-end"
+                />
+                <SortHeaderBtn
+                  label="상태"
+                  sortKey="status"
+                  current={sort}
+                  onSort={handleSort}
+                  className="w-16 shrink-0 justify-end"
+                />
+              </div>
+              {sortedDags.map((dag) => (
                 <DagRow key={dag.dag_id} dag={dag} />
               ))}
             </div>
