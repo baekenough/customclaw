@@ -332,5 +332,6 @@ from bot_engine.platforms.registry import PlatformRegistry  # noqa: E402
 
 PlatformRegistry.register(
     "slack",
+    adapter_factory=SlackAdapter,
     publisher_factory=lambda bot_token, **kw: SlackResponsePublisher(bot_token=bot_token),
 )
