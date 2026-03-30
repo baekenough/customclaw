@@ -58,7 +58,7 @@ services:
       MERGE_WINDOW_SECONDS: "5"
     entrypoint: ["worker"]
     healthcheck:
-      test: ["CMD-SHELL", "pgrep worker || exit 1"]
+      test: ["CMD-SHELL", "kill -0 1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

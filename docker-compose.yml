@@ -79,7 +79,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       HOME: /home/airflow
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/ > /dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -184,7 +184,7 @@ services:
       AIRFLOW_API_PASSWORD: ${AIRFLOW_API_PASSWORD}
       AUTH_TRUST_HOST: "true"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:3000 || exit 1"]
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000').then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))\""]
       interval: 30s
       timeout: 10s
       retries: 3
