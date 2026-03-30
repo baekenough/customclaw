@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -25,19 +26,22 @@ func resolveEnv(value string) string {
 // yamlBotFile is the raw YAML structure as read from disk.
 // Fields are mapped to BotConfig after env resolution.
 type yamlBotFile struct {
-	Name     string         `yaml:"name"`
-	Platform string         `yaml:"platform"`
-	Slack    map[string]any `yaml:"slack"`
-	Mattermost map[string]any `yaml:"mattermost"`
-	Discord  map[string]any `yaml:"discord"`
-	Channels []string       `yaml:"channels"`
-	Persona  map[string]any `yaml:"persona"`
-	Project  map[string]any `yaml:"project"`
-	Airflow  map[string]any `yaml:"airflow"`
-	Tools    map[string]any `yaml:"tools"`
-	Claude   map[string]any `yaml:"claude"`
-	Memory   map[string]any `yaml:"memory"`
-	Security map[string]any `yaml:"security"`
+	Name        string            `yaml:"name"`
+	Platform    string            `yaml:"platform"`
+	Slack       map[string]any    `yaml:"slack"`
+	Mattermost  map[string]any    `yaml:"mattermost"`
+	Discord     map[string]any    `yaml:"discord"`
+	Channels    []string          `yaml:"channels"`
+	Persona     map[string]any    `yaml:"persona"`
+	Project     map[string]any    `yaml:"project"`
+	Airflow     map[string]any    `yaml:"airflow"`
+	Tools       map[string]any    `yaml:"tools"`
+	Claude      map[string]any    `yaml:"claude"`
+	Memory      map[string]any    `yaml:"memory"`
+	Security    map[string]any    `yaml:"security"`
+	// Credentials is the platform-neutral key-value credential store.
+	// Values that begin with "${" are resolved as environment variables.
+	Credentials map[string]string `yaml:"credentials"`
 }
 
 func stringField(m map[string]any, key string) string {
@@ -175,7 +179,8 @@ func LoadAllBotsFromDB(ctx context.Context, dsn string) ([]*BotConfig, error) {
 			channels, persona, project, airflow, tools,
 			claude, memory, security,
 			platform, discord, mattermost,
-			anthropic_api_key, openai_api_key, gemini_api_key
+			anthropic_api_key, openai_api_key, gemini_api_key,
+			credentials
 		FROM bots
 		WHERE is_active = true
 		ORDER BY created_at, id
@@ -209,6 +214,7 @@ func scanBotRow(rows pgx.Rows) (*BotConfig, error) {
 		platform                     string
 		discord, mattermost          map[string]any
 		anthropicKey, openaiKey, geminiKey *string // nullable per-bot LLM keys
+		credentialsRaw               []byte
 	)
 
 	err := rows.Scan(
@@ -217,6 +223,7 @@ func scanBotRow(rows pgx.Rows) (*BotConfig, error) {
 		&claude, &memory, &security,
 		&platform, &discord, &mattermost,
 		&anthropicKey, &openaiKey, &geminiKey,
+		&credentialsRaw,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("scan row: %w", err)
@@ -283,6 +290,12 @@ func scanBotRow(rows pgx.Rows) (*BotConfig, error) {
 		cfg.LLMKeys.GeminiKey = *geminiKey
 	}
 
+	if len(credentialsRaw) > 0 && string(credentialsRaw) != "{}" {
+		if err := json.Unmarshal(credentialsRaw, &cfg.Credentials); err != nil {
+			slog.Warn("failed to parse credentials", "bot", cfg.ID, "error", err)
+		}
+	}
+
 	return cfg, nil
 }
 
@@ -324,34 +337,41 @@ func LoadAllBots(ctx context.Context, botsDir, dsn string) ([]*BotConfig, error)
 
 // validateBotConfig checks that the required platform-specific credentials are present.
 func validateBotConfig(cfg *BotConfig) error {
+	if cfg.Platform == "" {
+		return fmt.Errorf("bot %q: platform must be explicitly set", cfg.ID)
+	}
 	switch cfg.Platform {
 	case "slack":
-		var missing []string
-		if cfg.SlackAppToken == "" {
-			missing = append(missing, "slack_app_token")
+		appToken := cfg.SlackAppToken
+		botToken := cfg.SlackBotToken
+		if appToken == "" {
+			appToken = cfg.Credentials["app_token"]
 		}
-		if cfg.SlackBotToken == "" {
-			missing = append(missing, "slack_bot_token")
+		if botToken == "" {
+			botToken = cfg.Credentials["bot_token"]
 		}
-		if len(missing) > 0 {
-			return fmt.Errorf("bot %q (platform=slack) missing required fields: %s",
-				cfg.ID, strings.Join(missing, ", "))
+		if appToken == "" || botToken == "" {
+			return fmt.Errorf("bot %q: slack requires app_token and bot_token (via credentials or legacy fields)", cfg.ID)
 		}
 	case "mattermost":
-		var missing []string
-		if cfg.Mattermost.URL == "" {
-			missing = append(missing, "mattermost.url")
+		url := cfg.Mattermost.URL
+		token := cfg.Mattermost.Token
+		if url == "" {
+			url = cfg.Credentials["url"]
 		}
-		if cfg.Mattermost.Token == "" {
-			missing = append(missing, "mattermost.token")
+		if token == "" {
+			token = cfg.Credentials["token"]
 		}
-		if len(missing) > 0 {
-			return fmt.Errorf("bot %q (platform=mattermost) missing required fields: %s",
-				cfg.ID, strings.Join(missing, ", "))
+		if url == "" || token == "" {
+			return fmt.Errorf("bot %q: mattermost requires url and token", cfg.ID)
 		}
 	case "discord":
-		if cfg.Discord.Token == "" {
-			return fmt.Errorf("bot %q (platform=discord) missing required field: discord.token", cfg.ID)
+		token := cfg.Discord.Token
+		if token == "" {
+			token = cfg.Credentials["token"]
+		}
+		if token == "" {
+			return fmt.Errorf("bot %q: discord requires token", cfg.ID)
 		}
 	default:
 		return fmt.Errorf("bot %q has unsupported platform %q; supported: slack, mattermost, discord",

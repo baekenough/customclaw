@@ -70,9 +70,11 @@ class DiscordConfig:
 class BotConfig:
     id: str = ""
     name: str = ""
+    platform: str = ""
+    credentials: dict = field(default_factory=dict)
+    # Deprecated: use credentials["app_token"] / credentials["bot_token"] instead
     slack_app_token: str = ""
     slack_bot_token: str = ""
-    platform: str = "slack"
     mattermost: MattermostConfig = field(default_factory=MattermostConfig)
     discord: DiscordConfig = field(default_factory=DiscordConfig)
     channels: list[str] = field(default_factory=list)
@@ -93,52 +95,69 @@ def _resolve_env(value: str) -> str:
     return value
 
 
+def _backfill_credentials(bot: BotConfig) -> None:
+    """Populate credentials from platform-specific fields if not explicitly set."""
+    if bot.credentials:
+        return
+
+    if bot.platform == "slack":
+        bot.credentials = {
+            "app_token": bot.slack_app_token,
+            "bot_token": bot.slack_bot_token,
+        }
+    elif bot.platform == "discord" and bot.discord.token:
+        bot.credentials = {
+            "token": bot.discord.token,
+            "guild_id": bot.discord.guild_id,
+        }
+    elif bot.platform == "mattermost" and bot.mattermost.token:
+        bot.credentials = {
+            "url": bot.mattermost.url,
+            "token": bot.mattermost.token,
+            "port": bot.mattermost.port,
+        }
+
+
 def _validate_bot_config(config: BotConfig) -> None:
     """Validate platform-specific required fields.
 
-    Raises:
-        ValueError: If required fields for the chosen platform are missing.
+    Accepts either legacy top-level fields (slack_app_token, etc.) or
+    the unified credentials dict. Raises ValueError if required fields
+    for the chosen platform are missing.
     """
+    if not config.platform:
+        raise ValueError(f"Bot '{config.id}' platform must be explicitly set.")
+
     if config.platform == "slack":
-        missing = [
-            field
-            for field, value in [
-                ("slack_app_token", config.slack_app_token),
-                ("slack_bot_token", config.slack_bot_token),
-            ]
-            if not value
-        ]
-        if missing:
+        has_legacy = config.slack_app_token and config.slack_bot_token
+        has_credentials = (
+            config.credentials.get("app_token")
+            and config.credentials.get("bot_token")
+        )
+        if not has_legacy and not has_credentials:
             raise ValueError(
                 f"Bot '{config.id}' (platform=slack) missing required fields: "
-                + ", ".join(missing)
+                "slack_app_token and slack_bot_token (or credentials.app_token and "
+                "credentials.bot_token)"
             )
     elif config.platform == "mattermost":
-        missing = [
-            field
-            for field, value in [
-                ("mattermost.url", config.mattermost.url),
-                ("mattermost.token", config.mattermost.token),
-            ]
-            if not value
-        ]
-        if missing:
+        has_legacy = config.mattermost.url and config.mattermost.token
+        has_credentials = (
+            config.credentials.get("url") and config.credentials.get("token")
+        )
+        if not has_legacy and not has_credentials:
             raise ValueError(
                 f"Bot '{config.id}' (platform=mattermost) missing required fields: "
-                + ", ".join(missing)
+                "mattermost.url and mattermost.token (or credentials.url and "
+                "credentials.token)"
             )
     elif config.platform == "discord":
-        missing = [
-            field
-            for field, value in [
-                ("discord.token", config.discord.token),
-            ]
-            if not value
-        ]
-        if missing:
+        has_legacy = bool(config.discord.token)
+        has_credentials = bool(config.credentials.get("token"))
+        if not has_legacy and not has_credentials:
             raise ValueError(
                 f"Bot '{config.id}' (platform=discord) missing required fields: "
-                + ", ".join(missing)
+                "discord.token (or credentials.token)"
             )
     else:
         raise ValueError(
@@ -166,7 +185,8 @@ def load_bot_from_yaml(path: Path) -> BotConfig:
     config = BotConfig(
         id=data["name"],
         name=data["name"],
-        platform=data.get("platform", "slack"),
+        platform=data.get("platform", ""),
+        credentials=data.get("credentials", {}),
         slack_app_token=_resolve_env(slack.get("app_token", "")),
         slack_bot_token=_resolve_env(slack.get("bot_token", "")),
         mattermost=MattermostConfig(
@@ -209,6 +229,7 @@ def load_bot_from_yaml(path: Path) -> BotConfig:
             mention_only=security_data.get("mention_only", False),
         ),
     )
+    _backfill_credentials(config)
     _validate_bot_config(config)
     return config
 
@@ -252,9 +273,10 @@ def load_bot_from_db_row(row) -> BotConfig:
     claude_data = row[9]
     memory_data = row[10]
     security_data = row[11]
-    platform = row[12] if len(row) > 12 else "slack"
+    platform = row[12] if len(row) > 12 else ""
     discord_data = row[13] if len(row) > 13 else {}
     mattermost_data = row[14] if len(row) > 14 else {}
+    credentials_data = row[15] if len(row) > 15 else {}
 
     persona_data = _as_dict(persona_data)
     project_data = _as_dict(project_data)
@@ -265,13 +287,15 @@ def load_bot_from_db_row(row) -> BotConfig:
     security_data = _as_dict(security_data)
     discord_data = _as_dict(discord_data)
     mattermost_data = _as_dict(mattermost_data)
+    credentials = _as_dict(credentials_data)
 
-    return BotConfig(
+    bot = BotConfig(
         id=bot_id,
         name=name,
+        platform=platform or "",
+        credentials=credentials,
         slack_app_token=_resolve_env(slack_app_token or ""),
         slack_bot_token=_resolve_env(slack_bot_token or ""),
-        platform=platform or "slack",
         discord=DiscordConfig(
             token=_resolve_env(discord_data.get("token", "")),
             guild_id=discord_data.get("guild_id", ""),
@@ -312,6 +336,9 @@ def load_bot_from_db_row(row) -> BotConfig:
             mention_only=security_data.get("mention_only", False),
         ),
     )
+    _backfill_credentials(bot)
+    _validate_bot_config(bot)
+    return bot
 
 
 def load_all_bots_from_db() -> list[BotConfig]:
@@ -340,7 +367,8 @@ def load_all_bots_from_db() -> list[BotConfig]:
                     security,
                     platform,
                     discord,
-                    mattermost
+                    mattermost,
+                    credentials
                 FROM bots
                 WHERE is_active = true
                 ORDER BY created_at, id

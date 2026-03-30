@@ -334,7 +334,7 @@ func TestValidateBotConfig(t *testing.T) {
 				SlackBotToken: "xoxb-1",
 			},
 			wantErr: true,
-			errFrag: "slack_app_token",
+			errFrag: "slack requires app_token and bot_token",
 		},
 		{
 			name: "slack missing bot token",
@@ -344,7 +344,7 @@ func TestValidateBotConfig(t *testing.T) {
 				SlackAppToken: "xapp-1",
 			},
 			wantErr: true,
-			errFrag: "slack_bot_token",
+			errFrag: "slack requires app_token and bot_token",
 		},
 		{
 			name: "slack missing both tokens",
@@ -353,7 +353,7 @@ func TestValidateBotConfig(t *testing.T) {
 				Platform: "slack",
 			},
 			wantErr: true,
-			errFrag: "slack_app_token",
+			errFrag: "slack requires app_token and bot_token",
 		},
 		{
 			name: "valid mattermost",
@@ -377,7 +377,7 @@ func TestValidateBotConfig(t *testing.T) {
 				},
 			},
 			wantErr: true,
-			errFrag: "mattermost.token",
+			errFrag: "mattermost requires url and token",
 		},
 		{
 			name: "valid discord",
@@ -395,7 +395,7 @@ func TestValidateBotConfig(t *testing.T) {
 				Platform: "discord",
 			},
 			wantErr: true,
-			errFrag: "discord.token",
+			errFrag: "discord requires token",
 		},
 		{
 			name: "unsupported platform",

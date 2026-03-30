@@ -59,6 +59,7 @@ export async function PUT(
       slackBotToken,
       discord,
       mattermost,
+      credentials,
       channels,
       persona,
       project,
@@ -73,15 +74,48 @@ export async function PUT(
       geminiApiKey,
     } = body;
 
+    // Validate platform credentials if platform is being updated
+    const effectivePlatform = platform ?? existing.platform;
+    if (effectivePlatform === "slack") {
+      const appToken = slackAppToken || credentials?.app_token;
+      const botToken = slackBotToken || credentials?.bot_token;
+      // Only enforce if tokens are explicitly being cleared (empty string)
+      if (slackAppToken === "" && !credentials?.app_token) {
+        return Response.json(
+          { error: "Slack requires app_token and bot_token" },
+          { status: 400 }
+        );
+      }
+      if (slackBotToken === "" && !credentials?.bot_token) {
+        return Response.json(
+          { error: "Slack requires app_token and bot_token" },
+          { status: 400 }
+        );
+      }
+      void appToken;
+      void botToken;
+    }
+
+    // Resolve legacy fields from credentials for backward compat
+    const resolvedSlackAppToken =
+      slackAppToken !== undefined
+        ? slackAppToken || credentials?.app_token || ""
+        : undefined;
+    const resolvedSlackBotToken =
+      slackBotToken !== undefined
+        ? slackBotToken || credentials?.bot_token || ""
+        : undefined;
+
     const bot = await prisma.bot.update({
       where: { id },
       data: {
         ...(name !== undefined && { name }),
         ...(platform !== undefined && { platform }),
-        ...(slackAppToken !== undefined && { slackAppToken }),
-        ...(slackBotToken !== undefined && { slackBotToken }),
+        ...(resolvedSlackAppToken !== undefined && { slackAppToken: resolvedSlackAppToken }),
+        ...(resolvedSlackBotToken !== undefined && { slackBotToken: resolvedSlackBotToken }),
         ...(discord !== undefined && { discord }),
         ...(mattermost !== undefined && { mattermost }),
+        ...(credentials !== undefined && { credentials }),
         ...(channels !== undefined && { channels }),
         ...(persona !== undefined && { persona }),
         ...(project !== undefined && { project }),

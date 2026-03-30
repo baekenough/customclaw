@@ -43,6 +43,7 @@ interface BotRaw {
   slackBotToken: string;
   discord?: { token?: string; guild_id?: string };
   mattermost?: { url?: string; token?: string; port?: number };
+  credentials?: Record<string, unknown>;
   channels: string[];
   isActive: boolean;
   persona: { display_name?: string; description?: string; personality?: string };
@@ -79,7 +80,7 @@ export default function BotDetailPage({
 
   // Form state
   const [name, setName] = useState("");
-  const [platform, setPlatform] = useState<"slack" | "discord" | "mattermost">("slack");
+  const [platform, setPlatform] = useState<"" | "slack" | "discord" | "mattermost">("");
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
   const [discordToken, setDiscordToken] = useState("");
@@ -113,7 +114,7 @@ export default function BotDetailPage({
       .then((data: BotRaw) => {
         setBot(data);
         setName(data.name);
-        setPlatform((data.platform as "slack" | "discord" | "mattermost") ?? "slack");
+        setPlatform((data.platform as "" | "slack" | "discord" | "mattermost") ?? "");
         setSlackAppToken(data.slackAppToken);
         setSlackBotToken(data.slackBotToken);
         setDiscordToken(data.discord?.token ?? "");
@@ -168,6 +169,15 @@ export default function BotDetailPage({
     setError(null);
     setSubmitting(true);
     try {
+      const credentials =
+        platform === "slack"
+          ? { app_token: slackAppToken, bot_token: slackBotToken }
+          : platform === "discord"
+          ? { token: discordToken, guild_id: discordGuildId }
+          : platform === "mattermost"
+          ? { url: mattermostUrl, token: mattermostToken, port: parseInt(mattermostPort) || 8065 }
+          : {};
+
       const res = await fetch(`/api/bots/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -179,6 +189,7 @@ export default function BotDetailPage({
             : platform === "mattermost"
             ? { mattermost: { url: mattermostUrl, token: mattermostToken, port: mattermostPort ? parseInt(mattermostPort) : 8065 }, slackAppToken: "", slackBotToken: "" }
             : { slackAppToken, slackBotToken }),
+          credentials,
           channels: allowedChannels,
           isActive,
           persona: { display_name: displayName, description, personality },
@@ -282,10 +293,10 @@ export default function BotDetailPage({
               <Label className="text-xs">플랫폼</Label>
               <Select
                 value={platform}
-                onValueChange={(v) => setPlatform(v as "slack" | "discord" | "mattermost")}
+                onValueChange={(v) => setPlatform(v as "" | "slack" | "discord" | "mattermost")}
               >
                 <SelectTrigger className="h-9 text-sm">
-                  <SelectValue />
+                  <SelectValue placeholder="플랫폼 선택..." />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="slack">Slack</SelectItem>

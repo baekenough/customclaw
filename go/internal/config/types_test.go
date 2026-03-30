@@ -13,7 +13,7 @@ func TestBotConfigDefaults_ZeroValue(t *testing.T) {
 		got  any
 		want any
 	}{
-		{"Platform", cfg.Platform, "slack"},
+		{"Platform", cfg.Platform, ""},
 		{"Claude.Provider", cfg.Claude.Provider, "claude"},
 		{"Claude.Model", cfg.Claude.Model, "sonnet"},
 		{"Claude.MaxTurns", cfg.Claude.MaxTurns, 5},
