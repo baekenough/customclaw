@@ -80,6 +80,12 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
+      - name: Ensure ECR repository exists
+        run: |
+          aws ecr describe-repositories --repository-names "customclaw/${{ matrix.service }}" --region ${{ secrets.AWS_REGION }} 2>/dev/null || \
+          aws ecr create-repository --repository-name "customclaw/${{ matrix.service }}" --region ${{ secrets.AWS_REGION }} || \
+          echo "::warning::Could not create ECR repository customclaw/${{ matrix.service }} — push may fail"
+
       - name: Determine image tags
         id: tags
         run: |
