@@ -2,7 +2,7 @@
 
 > **AI Agent?** → [FOR-AGENTS.md](FOR-AGENTS.md)를 참조하세요.
 
-AI Slack 봇 관리 플랫폼 — 여러 AI 봇을 한 곳에서 생성·운영하며, Claude CLI 또는 Codex CLI를 LLM 프로바이더로 선택할 수 있습니다.
+AI 봇 관리 플랫폼 — 여러 AI 봇을 한 곳에서 생성·운영하며, Claude CLI 또는 Codex CLI를 LLM 프로바이더로 선택할 수 있습니다.
 
 [English](README.en.md) | [아키텍처](docs/architecture.md)
 
@@ -14,7 +14,7 @@ AI Slack 봇 관리 플랫폼 — 여러 AI 봇을 한 곳에서 생성·운영�
 - **도구 호출** — GitHub 이슈 관리, Airflow DAG 조작, 코드 검색, 봇 자체 관리
 - **Web UI** — Next.js 16 대시보드로 봇 CRUD, 사용량 모니터링, Airflow 연동
 - **Airflow DAG** — 릴리즈 모니터링, GitHub 이슈 자동 분석
-- **PR 자동 분석** — PR 생성 시 GitHub Actions → Airflow DAG → Claude CLI로 정합성 분석, Slack 스레드 알림
+- **PR 자동 분석** — PR 생성 시 GitHub Actions → Airflow DAG → Claude CLI로 정합성 분석, GitHub 코멘트 알림
 - **피드백 수집** — 익명 피드백 제출 → GitHub 이슈 자동 생성
 - **API 사용량 추적** — Claude CLI 호출마다 토큰(input/output/cache)과 비용을 자동 기록, 대시보드에서 기간별 조회
 - **문서 변경 감지** — Claude Code / Codex 공식 문서의 구조 변경을 매일 감지, 영향 분석 후 이슈 자동 생성
@@ -27,8 +27,8 @@ AI Slack 봇 관리 플랫폼 — 여러 AI 봇을 한 곳에서 생성·운영�
 | 카테고리 | 기술 |
 |---|---|
 | LLM | Claude Code CLI (Anthropic), Codex CLI (OpenAI) |
-| 메시징 | Slack Bolt (Socket Mode), Redis Streams |
-| 백엔드 | Python 3.12, Slack SDK |
+| 메시징 | Redis Streams, Platform Adapters (Discord, Mattermost) |
+| 백엔드 | Python 3.12, Go 1.24 (primary worker) |
 | 벡터 DB | PostgreSQL 16 + pgvector (HNSW 인덱스, 1024차원) |
 | 검색 | OpenSearch 2.x + nori 한국어 형태소 분석기 |
 | 캐시/큐 | Redis 7 (Streams, AOF 영속성) |
@@ -36,7 +36,7 @@ AI Slack 봇 관리 플랫폼 — 여러 AI 봇을 한 곳에서 생성·운영�
 | Web UI | Next.js 16, React 19, Tailwind CSS 4, shadcn/ui |
 | ORM | Prisma 7 (Next.js), psycopg2 (Python) |
 | 인증 | NextAuth v5, GitHub OAuth |
-| 컨테이너 | Docker Compose |
+| 컨테이너 | Docker Compose, AWS ECR |
 | 배포 | 직접 IP / 리버스 프록시 / Cloudflare Tunnel |
 | 임베딩 | Voyage AI (1024차원, 선택사항) |
 
@@ -60,7 +60,7 @@ uv run setup.py
 ```
 
 대화형 CLI가 안내합니다:
-1. **환경 설정** — DB, API 키, Slack 토큰, 호스트 경로 등 입력 → `.env` 생성
+1. **환경 설정** — DB, API 키, 호스트 경로 등 입력 → `.env` 생성
 2. **첫 번째 봇 생성** — 봇 이름, 페르소나, LLM 프로바이더 선택 → `bots/*.yaml` 생성
 3. **서비스 시작** — `docker compose up -d` 자동 실행
 
@@ -71,7 +71,7 @@ uv run setup.py
 docker compose ps
 
 # 봇 로그
-docker compose logs -f slack-bolt worker
+docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml logs -f go-worker
 ```
 
 서비스 포트:
@@ -93,15 +93,20 @@ customclaw/
 │   └── example.yaml         # 예시 봇 설정
 ├── dags/                    # Airflow DAG 파일 (사용자 정의)
 │   └── example_hello_world.py  # 예시 DAG
+├── go/                      # Go primary worker
+│   ├── cmd/worker/          # Go worker 진입점
+│   └── internal/            # 내부 패키지 (consumer, provider, tools)
 ├── docker/
 │   ├── airflow/             # Airflow Dockerfile + entrypoint
 │   ├── opensearch/          # nori 플러그인 포함 이미지
-│   ├── slack-bolt/          # Slack 봇 + Worker 이미지
+│   ├── go-worker/           # Go worker 이미지
 │   └── web-ui/              # Next.js 이미지
 ├── migrations/              # PostgreSQL 마이그레이션 SQL
 ├── bot_engine/
-│   ├── app.py               # BotManager — Socket Mode 진입점
-│   ├── worker.py            # Redis Stream 컨슈머, CLI 실행
+│   ├── app.py               # BotManager 진입점
+│   ├── platforms/
+│   │   └── registry.py      # 플랫폼 어댑터 레지스트리
+│   ├── worker.py            # Redis Stream 컨슈머 (deprecated, Go로 이전)
 │   ├── analysis_worker.py   # 분석 전용 Redis Stream 컨슈머
 │   ├── supervisor.py        # 프로세스 슈퍼바이저
 │   ├── runtime_control.py   # 런타임 제어 헬퍼
@@ -134,11 +139,11 @@ customclaw/
 
 <p align="center"><img src="assets/diagrams/01-system-architecture.png" width="800" /></p>
 
-1. `slack-bolt` — Slack Socket Mode로 메시지 수신, Redis Stream에 발행
-2. `worker` — Redis Consumer Group으로 메시지 소비, 봇 설정에 따라 Claude CLI 또는 Codex CLI 실행
+1. `platform adapter` — 플랫폼 어댑터가 메시지 수신, Redis Stream에 발행
+2. `go-worker` — Go 기반 primary worker가 Redis Consumer Group으로 메시지 소비, 봇 설정에 따라 Claude CLI 또는 Codex CLI 실행
 3. 메모리 — Voyage AI 임베딩 생성 → pgvector + OpenSearch에 저장·검색
-4. 응답 — Slack API로 스레드에 답변 전송
-5. `analysis_worker` — PR 분석 요청을 별도 Redis Stream(`customclaw:analysis-requests`)에서 소비, Claude CLI로 분석 후 Slack 알림
+4. 응답 — 플랫폼 API로 스레드에 답변 전송
+5. `analysis_worker` — PR 분석 요청을 별도 Redis Stream(`customclaw:analysis-requests`)에서 소비, Claude CLI로 분석 후 GitHub 코멘트 알림
 
 ---
 
@@ -161,10 +166,7 @@ GitHub OAuth로 로그인 후 아래 페이지를 사용할 수 있습니다.
 
 ```yaml
 name: my-bot
-slack:
-  app_token: ${MY_BOT_SLACK_APP_TOKEN}   # xapp-...
-  bot_token: ${MY_BOT_SLACK_BOT_TOKEN}   # xoxb-...
-  channels: []                            # 빈 배열 = 전체 채널
+platform: discord                         # discord | mattermost | slack (선택)
 
 persona:
   display_name: "My Bot"
@@ -280,8 +282,8 @@ cloudflared tunnel run customclaw
 
 ```bash
 git pull origin develop
-docker compose pull
-docker compose up -d
+docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml pull
+docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml up -d
 ```
 
 ### 자동 업데이트
@@ -298,7 +300,7 @@ customclaw는 Watchtower를 통해 핵심 엔진을 자동으로 업데이트합
 
 ```yaml
 # docker-compose.yml에서 latest 대신 버전 태그 지정
-image: ghcr.io/baekenough/customclaw-slack-bolt:v1.2.3
+image: <aws-account-id>.dkr.ecr.<region>.amazonaws.com/customclaw-go-worker:v1.2.3
 ```
 
 #### 개발 모드

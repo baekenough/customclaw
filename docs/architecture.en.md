@@ -6,7 +6,7 @@
 
 ## 1. System Overview
 
-CustomClaw is a multi-tenant bot platform that routes user messages through a Redis Stream pipeline to a worker that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Platform adapters support Slack (Socket Mode), Discord, and Mattermost. Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using hybrid BM25 keyword + kNN vector search with multi-tier caching (L1 exact, L2 semantic). A CDC pipeline cascades message deletions and edits to associated memories, maintaining search index consistency. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages nine autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, PR analysis, AgentNav issue analysis, documentation drift monitoring, and an example hello-world DAG.
+CustomClaw is a multi-tenant bot platform that routes user messages through a Redis Stream pipeline to a Go worker (primary) that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Platform adapters support Discord (primary), Slack (Socket Mode, optional profile), and Mattermost. A `PublisherFactory` with cached publisher instances handles platform-specific response delivery; unsupported platforms degrade gracefully via a `noopPublisher`. Container images are hosted on Amazon ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/*`). Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using hybrid BM25 keyword + kNN vector search with multi-tier caching (L1 exact, L2 semantic). A CDC pipeline cascades message deletions and edits to associated memories, maintaining search index consistency. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages nine autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, PR analysis, AgentNav issue analysis, documentation drift monitoring, and an example hello-world DAG.
 
 ---
 
@@ -70,29 +70,33 @@ flowchart LR
 `BotManager` is the entry point. On startup it:
 
 1. Calls `load_all_bots(bots_dir)` to read all `*.yaml` files from `/app/bots/`.
-2. Instantiates one platform-specific runner per config (Slack `BotRunner`, Discord adapter, or Mattermost adapter).
+2. Instantiates one platform-specific runner per config based on the `platform` field (Discord adapter, Slack `BotRunner`, or Mattermost adapter).
 3. Starts each handler in a dedicated daemon thread.
 
 Three platform adapters are supported:
 
-| Platform | Adapter | Connection Mode |
-|----------|---------|----------------|
-| Slack | `BotRunner` + `slack_bolt.App` | Socket Mode (WebSocket) |
-| Discord | `DiscordAdapter` | Discord Gateway (WebSocket) |
-| Mattermost | — | WebSocket event stream |
+| Platform | Adapter | Connection Mode | Status |
+|----------|---------|----------------|--------|
+| Discord | `DiscordAdapter` | Discord Gateway (WebSocket) | Primary |
+| Slack | `BotRunner` + `slack_bolt.App` | Socket Mode (WebSocket) | Optional (profile: `slack`) |
+| Mattermost | — | WebSocket event stream | Supported |
 
-The Slack `BotRunner` registers a single `message` event handler. For each eligible message it:
+**PublisherFactory pattern (Go worker):** The Go worker uses a `PublisherFactory` to create and cache `ResponsePublisher` instances keyed by `platform:botToken`. Supported platforms (`slack`, `discord`) get concrete publishers; unsupported platforms receive a `noopPublisher` that logs warnings but never fails, enabling graceful degradation. Slack imports are optional -- the factory only creates a Slack publisher when a Slack-platform message arrives.
+
+For each eligible message the adapter:
 
 - Filters by `allowed_channels` and `allowed_users` from `SecurityConfig`.
 - Supports `mention_only` mode (Discord bots: only respond when @mentioned).
 - Adds an `hourglass_flowing_sand` emoji reaction to the source message.
 - Publishes the event (bot_id, channel_id, thread_ts, user_id, text, message_ts, bot_token) to Redis Stream key `customclaw:slack-messages` via `xadd`.
 
+> **Note:** The stream key `customclaw:slack-messages` retains its historical name. It will be renamed to a platform-neutral key in Phase 4.
+
 <p align="center"><img src="../assets/diagrams/03-worker-consumer.png" width="800" /></p>
 
-### 3.2 Worker (`worker.py`)
+### 3.2 Worker (Go — primary)
 
-The worker is the core processing engine. It joins Redis consumer group `customclaw-workers` under a consumer name derived from its hostname (allowing horizontal scaling).
+The **Go worker** (`go/`) is the primary production message processor. The Python worker (`worker.py`) is deprecated and available only under the `legacy` Docker Compose profile. The Go worker joins Redis consumer group `customclaw-workers` under a configurable consumer name (default: `go-worker-1`) and dispatches messages through a `PublisherFactory` that resolves the correct platform publisher per message.
 
 **Processing modes:**
 
@@ -119,19 +123,21 @@ sequenceDiagram
     else no tool_call
         W-->>W: use Phase 1 response directly
     end
-    W->>Slack: chat_postMessage
+    W->>Platform: SendMessage (via PublisherFactory)
 ```
 
 **Supported providers:**
 
-- `claude` — invokes `claude -p <prompt_file> --model <model> --max-turns <n>` (optionally with `--dangerously-skip-permissions` for full-agent mode)
+- `claude` — invokes `claude -p <prompt_file> --model <model> --max-turns <n>` (optionally with `--dangerously-skip-permissions` for full-agent mode). Uses Claude CLI OAuth (not API key) for authentication.
 - `codex` — invokes `codex exec <prompt> -m gpt-5.4 --dangerously-bypass-approvals-and-sandbox`
 
-**Prompt construction** (`_build_system_prompt`): concatenates persona personality, GitHub repo reference, and local repo path from `BotConfig`.
+**Prompt construction**: concatenates persona personality, GitHub repo reference, and local repo path from `BotConfig`.
 
 **Memory context**: before each Phase 1 call, `HybridSearch.search(bot_id, text, top_k=5)` retrieves relevant memories from OpenSearch and prepends them to the prompt as `## 기억하고 있는 관련 정보:`.
 
 **Post-processing**: after sending the reply, `MemoryExtractor.extract_and_store` is called asynchronously (best-effort, non-blocking) to mine facts, decisions, and preferences from the conversation.
+
+**Per-key serial dispatch**: The Go worker uses a `Dispatcher` that groups messages by a composite key (bot_id + channel + thread) and processes them serially within each key, while different keys run concurrently. Per-key goroutines self-terminate after a 60-second idle timeout.
 
 ### 3.3 Memory System
 
@@ -331,16 +337,16 @@ A dedicated Redis Stream consumer that processes PR analysis and issue analysis 
 
 **PR Analysis workflow:**
 1. Consumes analysis request from Redis Stream
-2. Posts "analysis started" Slack notification (captures `thread_ts` for threading)
+2. Posts "analysis started" as a GitHub PR comment
 3. Invokes Claude CLI for architect + colleague parallel analyses
-4. Posts intermediate progress as thread reply
+4. Posts intermediate progress as GitHub comment updates
 5. Synthesizes results via Professor analysis
-6. Posts final summary as thread reply with checkmark reaction on start message
+6. Posts final summary as GitHub comment with analysis complete status
 
 **Reliability features:**
-- `xautoclaim` recovery for unacknowledged messages after configurable idle timeout (`ANALYSIS_PENDING_IDLE_MS`)
+- `xautoclaim` recovery for unacknowledged messages after idle timeout (10 minutes)
 - Redis distributed lock (`SET NX EX`, 15-min TTL) prevents duplicate analysis of same PR
-- Slack message threading keeps analysis updates organized per PR
+- GitHub comment threading keeps analysis updates organized per PR
 
 ### 3.10 Process Management (`supervisor.py` / `runtime_control.py`)
 
@@ -372,17 +378,17 @@ Both workflows use SSH with deploy keys to reach the production server and trigg
 
 ```mermaid
 sequenceDiagram
-    participant U as User (Slack)
-    participant SB as slack-bolt
+    participant U as User (Discord/Slack)
+    participant PA as Platform Adapter
     participant RS as Redis Stream
-    participant W as Worker
+    participant W as Go Worker
     participant PG as PostgreSQL
     participant OS as OpenSearch
     participant CLI as Claude/Codex CLI
 
-    U->>SB: sends message in allowed channel
-    SB->>U: reaction hourglass
-    SB->>RS: xadd (bot_id, channel, thread, user, text, token)
+    U->>PA: sends message in allowed channel
+    PA->>U: reaction hourglass
+    PA->>RS: xadd (bot_id, channel, thread, user, text, token)
 
     W->>RS: xreadgroup (block 5s, count 1)
     RS-->>W: message entry
@@ -407,7 +413,7 @@ sequenceDiagram
         end
     end
 
-    W->>U: chat_postMessage (reply in thread)
+    W->>U: SendMessage via PublisherFactory (reply in thread)
     W->>PG: save_message (role=assistant)
     W->>RS: xack (message acknowledged)
 
@@ -418,13 +424,13 @@ sequenceDiagram
 
 **Step-by-step summary:**
 
-1. User sends a message to Slack. `BotRunner` validates channel/user, adds hourglass reaction, and publishes to Redis Stream.
-2. Worker picks up the message via `xreadgroup` from consumer group `customclaw-workers`.
+1. User sends a message via Discord or Slack. The platform adapter validates channel/user, adds hourglass reaction, and publishes to Redis Stream (`customclaw:slack-messages`).
+2. Go worker picks up the message via `xreadgroup` from consumer group `customclaw-workers`. The `Dispatcher` routes it to a per-key goroutine for serial processing.
 3. User message saved to `messages` table. Recent thread/channel history loaded for context window.
 4. OpenSearch queried for relevant long-term memories using hybrid BM25 keyword + kNN vector search (with multi-tier cache).
 5. Prompt assembled from: persona, memory context, conversation history, tool descriptions (limited mode) or bare user message (full-agent mode).
 6. Claude CLI or Codex CLI invoked as subprocess. In limited mode a second call may follow if a tool was used.
-7. Final text posted to Slack. Assistant message saved to PostgreSQL. Redis Stream entry acknowledged.
+7. Final text posted via `PublisherFactory` (resolves to Discord or Slack publisher). Assistant message saved to PostgreSQL. Redis Stream entry acknowledged.
 8. Asynchronously (non-blocking): `MemoryExtractor` runs Claude haiku to mine facts/decisions/preferences from the conversation; results stored in PostgreSQL + OpenSearch.
 9. **CDC cascade**: When a platform message is later deleted, `DeleteByPlatformMsgID` resolves the message UUID, finds linked memories via `source_message_id`, deletes them from both OpenSearch and PostgreSQL, and invalidates the search cache.
 10. **Edit cascade**: When a message is edited, the DB content is updated, stale memories are invalidated, and the next extraction cycle recreates memories from the corrected text.
@@ -435,15 +441,15 @@ sequenceDiagram
 
 ### 5.1 `messages`
 
-Stores all Slack messages (user + assistant roles) for conversation context retrieval.
+Stores all platform messages (user + assistant roles) for conversation context retrieval.
 
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID PK | `gen_random_uuid()` |
 | `bot_id` | VARCHAR(64) | References logical bot |
-| `channel_id` | VARCHAR(64) | Slack channel |
+| `channel_id` | VARCHAR(64) | Platform channel |
 | `thread_ts` | VARCHAR(64) | Thread root timestamp |
-| `user_id` | VARCHAR(64) | Slack user or `"system"` for assistant |
+| `user_id` | VARCHAR(64) | Platform user or `"system"` for assistant |
 | `role` | VARCHAR(16) | `user` or `assistant` |
 | `content` | TEXT | Message body |
 | `timestamp` | TIMESTAMPTZ | Default NOW() |
@@ -479,9 +485,9 @@ Bot configuration store (managed via Web UI; YAML files are the bootstrap source
 |--------|------|-------|
 | `id` | VARCHAR(64) PK | Bot identifier |
 | `name` | VARCHAR(128) | Display name |
-| `slack_app_token` | TEXT | Encrypted at application layer |
-| `slack_bot_token` | TEXT | Encrypted at application layer |
-| `channels` | JSONB | `[]` of Slack channel IDs |
+| `slack_app_token` | TEXT | Encrypted at application layer (Slack bots) |
+| `slack_bot_token` | TEXT | Encrypted at application layer (Slack bots) |
+| `channels` | JSONB | `[]` of platform channel IDs |
 | `persona` | JSONB | Personality and display config |
 | `project` | JSONB | Repo path, GitHub repo, token var |
 | `airflow` | JSONB | DAG prefix |
@@ -517,23 +523,35 @@ Token usage tracking per bot invocation.
 
 ### 6.1 Docker Compose Service Map
 
-| Service | Image | Ports | Volumes | Purpose |
-|---------|-------|-------|---------|---------|
-| `postgres` | `pgvector/pgvector:pg16` | 5432 | `pgdata`, `migrations/` | Primary datastore |
-| `opensearch` | `customclaw-opensearch` | — | `osdata` | Korean keyword search |
-| `redis` | `redis:7-alpine` | — | `redisdata` | Message queue (AOF) |
-| `airflow` | `customclaw-airflow` | 8080 | `dags/`, workspace | DAG scheduler + webserver |
-| `slack-bolt` | `customclaw-slack-bolt` | — | `bots/`, `repos` | Platform adapter event ingestion (Slack / Discord) |
-| `worker` | `customclaw-slack-bolt` | — | `bots/`, `repos`, Claude/Codex auth | AI response processing |
-| `web-ui` | `customclaw-web-ui` | 3000 | — | Management web interface |
-| `claude-analyzer` | `customclaw-slack-bolt` | — | Claude auth, workspace | Docs drift analysis — Claude CLI sonnet |
-| `codex-analyzer` | `customclaw-slack-bolt` | — | Codex auth, workspace | Docs drift analysis — Codex CLI gpt-5.4 |
-| `gemini-analyzer` | `customclaw-slack-bolt` | — | Gemini auth, workspace | Docs drift analysis — Gemini CLI 3 Pro Preview |
-| `watchtower` | `nickfedor/watchtower` | — | Docker socket | Optional auto-update (profile: `auto-update`) |
+All custom images are hosted on Amazon ECR: `849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/*`.
 
-Total: 11 services (10 always-on + 1 optional profile)
+**Active services** (always-on):
 
-The three analyzer services (`claude-analyzer`, `codex-analyzer`, `gemini-analyzer`) consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `agentnav_issue_analyzer` DAG. Each runs `bot_engine.docs_analyzer` with a different CLI backend.
+| Service | Image | Ports | Purpose |
+|---------|-------|-------|---------|
+| `postgres` | `pgvector/pgvector:pg16` | 5432 | Primary datastore |
+| `opensearch` | `customclaw/opensearch:develop` (ECR) | — | Korean keyword search |
+| `redis` | `redis:7-alpine` | — | Message queue (AOF) |
+| `airflow` | `customclaw/airflow:develop` (ECR) | 8080 | DAG scheduler + webserver |
+| `go-worker` | Built from `./go/Dockerfile` | — | **Primary** AI response processing (Go) |
+| `web-ui` | `customclaw/web-ui:develop` (ECR) | 3000 | Management web interface |
+
+**Profiled services** (activated via `--profile`):
+
+| Service | Profile | Image | Purpose |
+|---------|---------|-------|---------|
+| `slack-bolt` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Slack/Discord platform adapter |
+| `worker` | `legacy` | `customclaw/slack-bolt:develop` (ECR) | Deprecated Python worker |
+| `claude-analyzer` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Docs drift analysis — Claude CLI |
+| `codex-analyzer` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Docs drift analysis — Codex CLI |
+| `gemini-analyzer` | `slack` | `customclaw/slack-bolt:develop` (ECR) | Docs drift analysis — Gemini CLI |
+| `watchtower` | `auto-update` | `nickfedor/watchtower` | Auto-update via Docker labels |
+
+Total: 6 active + 6 profiled services.
+
+The Go worker is started via an overlay compose file: `docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml up -d go-worker`.
+
+The three analyzer services consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `agentnav_issue_analyzer` DAG. Each runs `bot_engine.docs_analyzer` with a different CLI backend.
 
 ### 6.2 Named Volumes
 
@@ -567,8 +585,13 @@ OpenSearch security plugin is disabled (`plugins.security.disabled=true`) for in
 | postgres | `pg_isready` | 10s | 5 |
 | opensearch | `/_cluster/health?wait_for_status=yellow` | 10s | 10 (60s start delay) |
 | redis | `redis-cli ping` | 10s | 5 |
+| airflow | `curl http://localhost:8080/` | 30s | 3 (30s start delay) |
+| go-worker | `kill -0 1` (process alive) | 30s | 3 |
+| web-ui | `node fetch http://localhost:3000` | 30s | 3 (30s start delay) |
+| slack-bolt | Redis TCP connectivity | 30s | 3 |
+| claude/codex/gemini-analyzer | Redis TCP connectivity | 30s | 3 |
 
-`worker` and `web-ui` wait for `postgres` and `redis` health conditions before starting. `worker` additionally waits for `opensearch`.
+`go-worker` and `web-ui` wait for `postgres` and `redis` health conditions before starting. `go-worker` additionally waits for `opensearch`.
 
 ### 6.6 Key Environment Variables
 
@@ -598,10 +621,10 @@ Selected environment variables required across services:
 
 ### 7.2 External Connectivity
 
-- **Slack:** `slack-bolt` maintains a persistent outbound WebSocket connection to `api.slack.com` using Socket Mode — no inbound port required.
-- **Discord:** `slack-bolt` optionally connects to the Discord Gateway (`discord.com`) when `DISCORD_BOT_TOKEN` is set. The Discord adapter supports `mention_only` mode.
+- **Discord (primary):** The Go worker's `DiscordResponsePublisher` and the `slack-bolt` Discord adapter connect to the Discord Gateway (`discord.com`) via WebSocket. The Discord adapter supports `mention_only` mode.
+- **Slack (optional):** When the `slack` profile is active, `slack-bolt` maintains a persistent outbound WebSocket connection to `api.slack.com` using Socket Mode — no inbound port required.
 - **GitHub:** Airflow DAGs communicate with `api.github.com` outbound; `omc_issue_analyzer` is triggered inbound via GitHub Actions → SSH → `airflow dags trigger`.
-- **Anthropic / OpenAI:** `worker` and Airflow DAGs call Claude CLI and Codex CLI as subprocesses; CLIs communicate with the respective APIs over HTTPS.
+- **Anthropic / OpenAI:** `go-worker` and Airflow DAGs call Claude CLI and Codex CLI as subprocesses; CLIs communicate with the respective APIs over HTTPS.
 - **Web UI:** Exposed publicly via Cloudflare Tunnel on port 3000 with TLS termination at Cloudflare.
 
 ### 7.3 Secrets Management

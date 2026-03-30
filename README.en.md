@@ -1,27 +1,27 @@
-# CustomClaw — AI Slack Bot Management Platform
+# CustomClaw — AI Bot Management Platform
 
 > **AI Agent?** → See [FOR-AGENTS.md](FOR-AGENTS.md) for automated setup instructions.
 
 [한국어](README.md) | [Architecture](docs/architecture.en.md)
 
-CustomClaw is a self-hosted platform for creating and managing multiple AI-powered Slack bots. Each bot connects to Slack via Socket Mode, processes messages through a Redis Stream queue, and responds using Claude CLI or Codex CLI as its LLM backend — with persistent RAG memory across conversations.
+CustomClaw is a self-hosted platform for creating and managing multiple AI-powered chat bots across platforms (Discord, Mattermost, and more). Messages are processed through a Go worker via Redis Streams and responded to using Claude CLI or Codex CLI as the LLM backend — with persistent RAG memory across conversations.
 
 ---
 
 ## Key Features
 
-- **Multi-bot management** — Run any number of independent Slack bots from a single deployment, each with its own persona, model, and tool configuration
+- **Multi-bot management** — Run any number of independent bots from a single deployment, each with its own persona, model, and tool configuration
+- **Multi-platform** — Platform adapter registry supports Discord, Mattermost, and more (Slack deprecated)
 - **Multi-provider LLM** — Choose Claude CLI (Anthropic) or Codex CLI (OpenAI) per bot; supports full-agent agentic mode
 - **RAG memory** — Hybrid search (pgvector cosine similarity + OpenSearch nori BM25) gives every bot long-term memory across sessions
 - **Built-in tools** — Each bot can invoke GitHub issue management, Airflow DAG control, code search, and bot CRUD operations
 - **Web UI** — Next.js dashboard for bot creation/editing, real-time monitoring, and Airflow DAG management
 - **Airflow DAGs** — Automated workflows: GitHub issue AI analysis, PR consistency analysis, feedback collection, codebase RAG indexing, and release monitoring for Claude Code and GPT Codex
-- **Automated PR analysis** — Claude-powered consistency analysis triggered on PR creation, with Slack-threaded progress notifications
+- **Automated PR analysis** — Claude-powered consistency analysis triggered on PR creation, with GitHub comment notifications
 - **Feedback collection** — Anonymous feedback submission through GitHub Actions → Airflow DAG → GitHub issue creation
 - **API usage tracking** — Automatic token (input/output/cache) and cost recording for every Claude CLI call, with period-filtered dashboard views
 - **Documentation drift detection** — Daily monitoring of Claude Code and Codex official documentation for structural changes, with impact analysis and automatic issue creation
 - **Process supervision** — Managed restarts via supervisor process with Redis-based restart signaling
-- **Git worker** — Dedicated Redis Stream consumer for async Git operations
 - **Flexible deployment** — Direct IP access, reverse proxy (Nginx/Caddy), or Cloudflare Tunnel for public exposure
 
 ---
@@ -30,7 +30,8 @@ CustomClaw is a self-hosted platform for creating and managing multiple AI-power
 
 | Category | Technology |
 |----------|-----------|
-| Slack integration | Slack Bolt (Python), Socket Mode |
+| Primary worker | Go 1.24 |
+| Platform adapters | Discord, Mattermost (Slack deprecated) |
 | Message queue | Redis 7 Streams (consumer groups) |
 | LLM providers | Claude Code CLI (Anthropic), Codex CLI (OpenAI) |
 | Vector store | PostgreSQL 16 + pgvector (HNSW index, 1024-dim) |
@@ -42,7 +43,7 @@ CustomClaw is a self-hosted platform for creating and managing multiple AI-power
 | ORM | Prisma 7 |
 | Database | PostgreSQL 16 |
 | Cache / queue | Redis 7 |
-| Containerization | Docker Compose |
+| Container registry | AWS ECR, Docker Compose |
 | Ingress | Direct IP / Reverse Proxy / Cloudflare Tunnel |
 
 ---
@@ -57,6 +58,7 @@ CustomClaw is a self-hosted platform for creating and managing multiple AI-power
 - Codex CLI installed via npm (`npm install -g @openai/codex`) — optional, for the `codex` provider
 - A GitHub OAuth App (for Web UI login)
 - Voyage AI API key (optional, for embeddings)
+- Platform bot token (Discord bot token, etc.)
 
 ### 1. Setup and launch
 
@@ -67,7 +69,7 @@ uv run setup.py
 ```
 
 The interactive CLI guides you through:
-1. **Environment configuration** — database, API keys, Slack tokens, host paths → generates `.env`
+1. **Environment configuration** — database, API keys, platform tokens, host paths → generates `.env`
 2. **First bot creation** — bot name, persona, LLM provider → generates `bots/*.yaml`
 3. **Service launch** — runs `docker compose up -d` automatically
 
@@ -78,7 +80,7 @@ The interactive CLI guides you through:
 docker compose ps
 
 # Follow bot logs
-docker compose logs -f slack-bolt worker
+docker compose logs -f go-worker
 ```
 
 Open [http://localhost:3000](http://localhost:3000) and sign in with GitHub OAuth.
@@ -99,22 +101,25 @@ customclaw/
 ├── setup.py                     # Interactive setup CLI
 ├── bots/                        # Bot YAML configurations (user-defined)
 │   └── example.yaml             # Example bot config template
+├── go/                          # Go worker (primary message processor)
+│   ├── cmd/worker/              # Worker entrypoint
+│   └── internal/                # Core packages (provider, stream, config)
 ├── dags/                        # Airflow DAG files (user-defined)
 │   └── example_hello_world.py   # Example DAG
 ├── docker/                      # Dockerfiles and entrypoints
 │   ├── airflow/
 │   ├── opensearch/
-│   ├── slack-bolt/
 │   └── web-ui/
 ├── migrations/                  # PostgreSQL schema migrations
 │   └── 001_initial.sql
-├── bot_engine/                  # Core Python package
-│   ├── app.py                   # BotManager — loads bots, manages Socket Mode threads
-│   ├── worker.py                # Redis Stream consumer — invokes Claude/Codex CLI
+├── bot_engine/                  # Python package (platform adapters, config)
+│   ├── app.py                   # BotManager — loads bots, manages platform connections
+│   ├── platforms/
+│   │   └── registry.py          # Platform adapter registry (Discord, Mattermost, etc.)
+│   ├── worker.py                # Legacy Python worker (deprecated, use Go worker)
 │   ├── analysis_worker.py       # Dedicated analysis Redis Stream consumer
 │   ├── supervisor.py            # Process supervisor for managed restarts
 │   ├── runtime_control.py       # Runtime control helpers (Redis-based restart)
-│   ├── bot_runner.py            # Per-bot Slack event handler and stream producer
 │   ├── config/
 │   │   └── loader.py            # YAML bot config loader (BotConfig dataclass)
 │   ├── memory/
@@ -159,10 +164,10 @@ Each bot is defined by a YAML file in `bots/`. The platform loads all `*.yaml` f
 ```yaml
 name: my-bot                       # Unique bot ID
 
-slack:
-  app_token: ${MY_BOT_APP_TOKEN}   # xapp-... Socket Mode token
-  bot_token: ${MY_BOT_BOT_TOKEN}   # xoxb-... Bot OAuth token
-  channels: []                      # Restrict to specific channel IDs (empty = all)
+platform:
+  type: discord                    # discord | mattermost
+  token: ${MY_BOT_TOKEN}          # Platform bot token
+  channels: []                     # Restrict to specific channel IDs (empty = all)
 
 persona:
   display_name: "My Bot"
@@ -176,6 +181,7 @@ claude:
   model: sonnet         # claude: sonnet/opus/haiku | codex: gpt-5.4
   max_turns: 10         # Max agentic turns per message
   full_agent: false     # Enable full agentic mode (tool use across turns)
+  api_key_var: ""       # Per-bot API key env var (optional)
 
 memory:
   context_window: 20    # Number of recent messages to include in context
@@ -202,21 +208,11 @@ tools:
 
 security:
   allowed_channels: []  # Restrict bot to specific channels (empty = all)
-  allowed_users: []     # Restrict to specific Slack user IDs (empty = all)
+  allowed_users: []     # Restrict to specific user IDs (empty = all)
   dangerous_tools:      # Tools requiring implicit confirmation
     - delete_bot
     - trigger_dag
 ```
-
-### Creating a Slack App
-
-Before adding a new bot, create a Slack App at [api.slack.com/apps](https://api.slack.com/apps):
-
-1. Create app → **From scratch**
-2. Enable **Socket Mode** → generate an App-Level Token (`xapp-...`)
-3. **OAuth & Permissions** → add Bot Token Scopes: `chat:write`, `reactions:write`, `reactions:read`, `channels:history`, `channels:read`
-4. Install to Workspace → copy Bot Token (`xoxb-...`)
-5. **Event Subscriptions** → subscribe to `message.channels`
 
 ---
 
@@ -277,7 +273,7 @@ cloudflared tunnel run customclaw
 ```bash
 git pull origin develop
 docker compose pull
-docker compose up -d
+docker compose up -d go-worker go-shadow
 ```
 
 ### Auto-update
@@ -290,12 +286,7 @@ CustomClaw uses Watchtower to automatically update its core engine containers. T
 
 #### Pinning a version
 
-To use a specific version instead of auto-updating:
-
-```yaml
-# In docker-compose.yml, specify a version tag instead of latest
-image: ghcr.io/baekenough/customclaw-slack-bolt:v1.2.3
-```
+To use a specific version instead of auto-updating, specify a version tag in `docker-compose.yml` instead of `latest`.
 
 #### Development mode
 

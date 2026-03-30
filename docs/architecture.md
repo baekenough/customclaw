@@ -4,7 +4,7 @@
 
 ## 1. 시스템 개요
 
-CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나의 인프라에서 운영하면서 각 봇이 독립적인 퍼소나·프로젝트 컨텍스트·도구 세트를 가질 수 있도록 설계되어 있습니다. Slack, Mattermost, Discord 플랫폼 어댑터를 지원합니다. 사용자 메시지는 Socket Mode(Slack) 또는 플랫폼별 어댑터를 통해 수신되고, Redis Stream을 거쳐 Worker로 비동기 전달됩니다. Worker는 Claude CLI(Anthropic) 또는 Codex CLI(OpenAI)를 subprocess로 호출해 응답을 생성하며, 대화 이력은 PostgreSQL에, 장기 기억은 PostgreSQL(pgvector 임베딩) + OpenSearch(한국어 nori 키워드 검색)의 하이브리드 구조로 저장됩니다. Airflow는 GitHub 이슈 분석·릴리즈 모니터링·공식 문서 변경 감지 등 자동화 DAG 9개를 담당하고, Next.js 기반 Web UI가 봇 관리와 모니터링 기능을 제공합니다.
+CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나의 인프라에서 운영하면서 각 봇이 독립적인 퍼소나·프로젝트 컨텍스트·도구 세트를 가질 수 있도록 설계되어 있습니다. Discord, Mattermost 플랫폼 어댑터를 기본 지원하며, Slack 어댑터는 선택적(optional) 의존성입니다. 플랫폼 어댑터는 `PlatformRegistry` 패턴으로 런타임에 등록되어 플랫폼별 하드코딩 없이 어댑터/퍼블리셔를 생성합니다. 사용자 메시지는 플랫폼별 어댑터를 통해 수신되고, Redis Stream(`customclaw:slack-messages` — Phase 4에서 `customclaw:platform-messages`로 리네임 예정)을 거쳐 Worker로 비동기 전달됩니다. **Primary Worker는 Go**(`go/cmd/worker/main.go`)로 마이그레이션 완료되었으며, Python worker는 deprecated 상태입니다. Worker는 Claude CLI(Anthropic) 또는 Codex CLI(OpenAI)를 subprocess로 호출해 응답을 생성하며, 대화 이력은 PostgreSQL에, 장기 기억은 PostgreSQL(pgvector 임베딩) + OpenSearch(한국어 nori 키워드 검색)의 하이브리드 구조로 저장됩니다. Docker 이미지는 AWS ECR(`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com`)에서 관리됩니다. Airflow는 GitHub 이슈 분석·릴리즈 모니터링·공식 문서 변경 감지 등 자동화 DAG 9개를 담당하고, Next.js 기반 Web UI가 봇 관리와 모니터링 기능을 제공합니다.
 
 ---
 
@@ -24,12 +24,12 @@ CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나
 
 ### 3.1 플랫폼 어댑터 (app.py / bot_runner.py)
 
-`BotManager`는 `/app/bots/*.yaml` 파일을 로드하고, `platform` 필드에 따라 적절한 어댑터를 초기화합니다.
+`BotManager`는 `/app/bots/*.yaml` 파일을 로드하고, `PlatformRegistry`를 통해 플랫폼별 어댑터를 초기화합니다. 각 플랫폼 어댑터 모듈은 import 시점에 `PlatformRegistry.register()`로 자기 자신을 등록하므로, 플랫폼 추가/제거 시 중앙 코드 변경이 필요 없습니다.
 
-**Slack 어댑터**: 각 봇에 대해 `BotRunner` 인스턴스를 생성한 뒤 별도 스레드에서 Slack Socket Mode Handler를 시작합니다.
+**Slack 어댑터** (optional): `slack-bolt`은 선택적 의존성으로, `platforms/__init__.py`에서 `try/except ImportError`로 import됩니다. `_build_slack_adapters()`도 `try/except`로 감싸여 Slack 라이브러리 없이도 시스템이 정상 동작합니다. 각 봇에 대해 `BotRunner` 인스턴스를 생성한 뒤 별도 스레드에서 Slack Socket Mode Handler를 시작합니다.
 - `message` 이벤트를 수신하고 `subtype`이 있는 메시지(봇 메시지, 수정 이벤트 등)는 무시합니다.
 - `security.allowed_channels` / `security.allowed_users` 필터를 적용합니다.
-- 검증을 통과한 메시지를 `customclaw:slack-messages` Redis Stream에 `xadd`합니다.
+- 검증을 통과한 메시지를 `customclaw:slack-messages` Redis Stream에 `xadd`합니다 (Phase 4에서 `customclaw:platform-messages`로 리네임 예정).
 - 처리 중 ⏳ 리액션을 추가해 사용자에게 진행 상황을 알립니다.
 
 **Discord 어댑터** (`platforms/discord_adapter.py`): `discord.py` 라이브러리 기반. `DiscordConfig`의 `token`으로 연결하고, `guild_id`로 서버를 제한합니다. `security.mention_only: true` 설정 시 봇 멘션이 포함된 메시지만 처리합니다.
@@ -38,9 +38,13 @@ CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나
 
 <p align="center"><img src="../assets/diagrams/03-worker-consumer.png" width="800" /></p>
 
-### 3.2 Worker (worker.py)
+### 3.2 Worker
 
-Redis Consumer Group(`customclaw-workers`) 방식으로 메시지를 소비합니다. 여러 Worker 컨테이너를 병렬로 실행하면 자동으로 부하가 분산됩니다.
+**Primary Worker는 Go** (`go/cmd/worker/main.go`)로 마이그레이션 완료되었습니다. Python worker (`bot_engine/worker.py`)는 deprecated이며 `profiles: [legacy]`로 프로파일 아웃되어 있습니다.
+
+Go worker는 Redis Consumer Group(`customclaw-workers`) 방식으로 `customclaw:slack-messages` 스트림을 소비합니다 (Phase 4에서 `customclaw:platform-messages`로 리네임 예정). `docker-compose.go-shadow.yml`로 실행되며, 여러 Worker 인스턴스를 병렬 실행하면 자동으로 부하가 분산됩니다.
+
+`_get_publisher()`(Python) / `PublisherFactory`(Go)는 `PlatformRegistry` 패턴을 사용하여 플랫폼별 퍼블리셔를 생성합니다. 등록되지 않은 플랫폼에는 `NoOpResponsePublisher`를 반환하여 안전하게 폴백합니다.
 
 **2-Phase Prompt 방식 (limited mode):**
 1. **Phase 1**: 시스템 프롬프트 + 기억 컨텍스트 + 도구 설명 + 대화 이력 + 사용자 메시지를 전달. Claude는 `json tool_call` 블록을 포함할 수 있습니다.
@@ -160,10 +164,10 @@ omcustom-driver는 git 및 gh CLI가 필요합니다. worker 컨테이너 이미
 PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈머입니다.
 
 - **Redis Stream**: `customclaw:analysis-requests` / Consumer Group: `analysis-workers`
-- **기능**: Claude CLI를 subprocess로 호출하여 PR 정합성 분석 수행
-- **Slack 알림**: 분석 시작 → 진행 → 완료 메시지를 스레드로 묶어 전송 (thread_ts 기반)
+- **기능**: Claude CLI를 subprocess로 호출하여 PR 정합성 분석 수행 (CLI 타임아웃: 10분)
+- **GitHub 코멘트**: 분석 결과를 GitHub 이슈/PR 코멘트로 게시 (`_post_github_comment`)
 - **중복 방지**: Redis `SET NX EX` 분산 락으로 동일 PR 15분 내 중복 분석 차단
-- **복구**: `xautoclaim`으로 미확인 메시지 자동 복구
+- **복구**: `xautoclaim`으로 미확인 메시지 자동 복구 (idle timeout: 1분)
 
 ### 3.10 프로세스 관리 (supervisor.py / runtime_control.py)
 
@@ -187,13 +191,14 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 ### 전체 메시지 처리 흐름
 
 ```
-1. [수신] Slack 사용자 메시지
-      → BotRunner: 채널·사용자 권한 검증
+1. [수신] 플랫폼 사용자 메시지 (Discord / Mattermost / Slack)
+      → PlatformAdapter: 채널·사용자 권한 검증
       → Redis Stream xadd (customclaw:slack-messages)
+        (Phase 4에서 customclaw:platform-messages로 리네임 예정)
 
 2. [큐잉] Redis Stream
       → Consumer Group: customclaw-workers
-      → Worker 인스턴스 중 하나가 xreadgroup으로 할당 수신
+      → Go Worker 인스턴스가 xreadgroup으로 할당 수신
 
 3. [전처리] Worker
       → PostgreSQL: 사용자 메시지 저장 (messages 테이블)
@@ -207,8 +212,8 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
       → full_agent mode: 단일 프롬프트 → Claude (내장 도구 활용)
       → codex provider: codex exec → 메타데이터 파싱 → 순수 응답
 
-5. [응답] Slack API
-      → chat_postMessage (thread 내 응답)
+5. [응답] 플랫폼 API (PlatformRegistry → ResponsePublisher)
+      → 플랫폼별 메시지 전송 (thread 내 응답)
       → PostgreSQL: assistant 메시지 저장
 
 6. [사후 처리] 비동기 메모리 추출
@@ -258,16 +263,47 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 
 <p align="center"><img src="../assets/diagrams/11-service-dependency.png" width="800" /></p>
 
+### 서비스 현황
+
+Docker 이미지는 AWS ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/`)에서 관리됩니다.
+
+| 서비스 | 이미지 | 상태 | 비고 |
+|--------|--------|------|------|
+| postgres | pgvector/pgvector:pg16 | **Active** | |
+| opensearch | customclaw/opensearch:develop (ECR) | **Active** | |
+| redis | redis:7-alpine | **Active** | |
+| airflow | customclaw/airflow:develop (ECR) | **Active** | |
+| web-ui | customclaw/web-ui:develop (ECR) | **Active** | |
+| go-worker | go/Dockerfile (로컬 빌드) | **Active (Primary)** | `docker-compose.go-shadow.yml` |
+| slack-bolt | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | Slack 어댑터 |
+| worker (Python) | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [legacy]`) | Deprecated |
+| claude-analyzer | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
+| codex-analyzer | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
+| gemini-analyzer | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
+| watchtower | nickfedor/watchtower | Profiled out (`profiles: [auto-update]`) | 자동 이미지 업데이트 |
+
+### 헬스체크
+
+| 서비스 | 헬스체크 방식 |
+|--------|--------------|
+| postgres | `pg_isready -U ${DB_USER}` |
+| opensearch | `curl -sf http://localhost:9200/_cluster/health?wait_for_status=yellow` |
+| redis | `redis-cli ping` |
+| airflow | `curl -sf http://localhost:8080/` |
+| web-ui | `node -e "fetch('http://localhost:3000')..."` |
+| go-worker | `kill -0 1` (프로세스 존재 확인) |
+| slack-bolt / analyzers | Redis 연결 확인 (Python socket connect) |
+
 ### 주요 볼륨 마운트
 
 | 볼륨/경로 | 서비스 | 목적 |
 |-----------|--------|------|
-| `./bots:/app/bots` | slack-bolt, worker | 봇 YAML 설정 파일 실시간 반영 |
-| `repos:${CONTAINER_HOME}/workspace` | slack-bolt, worker, airflow | Git 리포지토리 공유 |
-| `${CLAUDE_CONFIG_DIR}:${CLAUDE_CONFIG_DIR}` | worker | Claude CLI 설정·인증 |
-| `${CLAUDE_CREDENTIALS_FILE}` | worker | Claude CLI 자격증명 |
-| `${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro` | worker | Claude CLI 바이너리 |
-| `${CODEX_CONFIG_DIR}:${CODEX_CONFIG_DIR}` | worker | Codex CLI 설정·인증 |
+| `./bots:/app/bots` | go-worker, slack-bolt | 봇 YAML 설정 파일 실시간 반영 |
+| `${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace` | go-worker, airflow | Git 리포지토리 공유 |
+| `${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude` | go-worker | Claude CLI 설정·인증 |
+| `${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json` | go-worker | Claude CLI 자격증명 |
+| `${CLAUDE_CLI_BINARY}:/usr/local/bin/claude:ro` | go-worker, airflow | Claude CLI 바이너리 |
+| `${CODEX_PKG_DIR}/.../codex:/usr/local/bin/codex:ro` | go-worker | Codex CLI 바이너리 (static Rust binary) |
 | `./dags:/opt/airflow/dags` | airflow | DAG 파일 핫 리로드 |
 | `./migrations:/docker-entrypoint-initdb.d` | postgres | 초기화 SQL 자동 실행 |
 
@@ -291,15 +327,15 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 
 | 변수 | 서비스 | 설명 |
 |------|--------|------|
-| `DATABASE_DSN` | slack-bolt, worker | PostgreSQL 연결 문자열 |
+| `DATABASE_DSN` | go-worker, slack-bolt | PostgreSQL 연결 문자열 |
 | `REDIS_URL` | 전체 | Redis 연결 URL |
-| `OPENSEARCH_URL` | worker | OpenSearch 엔드포인트 |
+| `OPENSEARCH_URL` | go-worker | OpenSearch 엔드포인트 |
 | `OPENSEARCH_ADMIN_PASSWORD` | opensearch | OpenSearch 초기 관리자 비밀번호 |
-| `ANTHROPIC_API_KEY` | worker | Claude API 인증 |
-| `VOYAGE_API_KEY` | worker | 임베딩 API (미래 pgvector 활성화용) |
-| `ENCRYPTION_KEY` | slack-bolt, worker | 토큰 암호화 키 |
-| `GITHUB_TOKEN` | worker, airflow | GitHub API 인증 |
-| `AIRFLOW_API_URL` | worker, web-ui | Airflow REST API 엔드포인트 |
+| `ANTHROPIC_API_KEY` | airflow | Claude API 인증 |
+| `VOYAGE_API_KEY` | (미사용) | 임베딩 API (미래 pgvector 활성화용) |
+| `ENCRYPTION_KEY` | slack-bolt | 토큰 암호화 키 |
+| `GITHUB_TOKEN` | go-worker, airflow | GitHub API 인증 |
+| `AIRFLOW_API_URL` | web-ui | Airflow REST API 엔드포인트 |
 | `NEXTAUTH_URL` | web-ui | NextAuth 콜백 기본 URL |
 | `GITHUB_CLIENT_ID/SECRET` | web-ui | GitHub OAuth 앱 자격증명 |
 
@@ -315,5 +351,8 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 | pgvector + OpenSearch 하이브리드 | 시맨틱(벡터) + 키워드(nori) 검색 상호 보완 | OpenSearch 메모리 부담, 동기화 복잡도 |
 | YAML 봇 설정 (우선) + DB (보조) | 파일 기반 빠른 배포, DB로 Web UI 관리 지원 | 두 소스 간 동기화 일관성 주의 필요 |
 | Codex provider | Claude 대비 GPT-5.4 모델 옵션 추가 | 메타데이터 파싱 추가 구현 필요 |
-| 멀티플랫폼 어댑터 (Slack / Discord / Mattermost) | 단일 인프라에서 플랫폼별 봇 운영, Discord `mention_only` 등 플랫폼 특화 옵션 지원 | 플랫폼별 어댑터 유지보수 필요 |
+| 멀티플랫폼 어댑터 (Discord / Mattermost / Slack) | 단일 인프라에서 플랫폼별 봇 운영, Discord `mention_only` 등 플랫폼 특화 옵션 지원 | 플랫폼별 어댑터 유지보수 필요 |
+| PlatformRegistry 패턴 | 플랫폼 추가/제거 시 중앙 코드 변경 불필요, NoOp 폴백으로 안전한 degradation | 런타임 등록 순서에 의존 |
+| Go worker (primary) | Python 대비 낮은 메모리 사용, 빠른 시작 시간, 타입 안전성 | Python 코드베이스와 이중 유지보수 (마이그레이션 완료 시까지) |
+| AWS ECR 이미지 관리 | 프라이빗 이미지 저장소, Watchtower 자동 업데이트 연동 | ECR 인증 관리 필요 |
 | 전용 analyzer 컨테이너 (claude/codex/gemini) | docs drift 분석을 CLI별 독립 컨테이너로 분리, Redis Stream 기반 비동기 처리 | 컨테이너 수 증가, CLI별 자격증명 볼륨 마운트 필요 |
