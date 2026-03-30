@@ -88,6 +88,7 @@ services:
   slack-bolt:
     image: ghcr.io/baekenough/customclaw-slack-bolt:latest
     restart: unless-stopped
+    profiles: [slack]
     stop_grace_period: 120s
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
@@ -192,6 +193,7 @@ services:
   claude-analyzer:
     image: ghcr.io/baekenough/customclaw-slack-bolt:latest
     restart: unless-stopped
+    profiles: [slack]
     stop_grace_period: 30s
     depends_on:
       redis:
@@ -224,6 +226,7 @@ services:
   codex-analyzer:
     image: ghcr.io/baekenough/customclaw-slack-bolt:latest
     restart: unless-stopped
+    profiles: [slack]
     stop_grace_period: 30s
     depends_on:
       redis:
@@ -255,6 +258,7 @@ services:
   gemini-analyzer:
     image: ghcr.io/baekenough/customclaw-slack-bolt:latest
     restart: unless-stopped
+    profiles: [slack]
     stop_grace_period: 30s
     depends_on:
       redis:
