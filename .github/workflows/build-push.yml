@@ -6,7 +6,36 @@ on:
     tags: ["v*"]
 
 jobs:
+  ci-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+
+      - name: Go build
+        working-directory: go
+        run: go build ./...
+
+      - name: Go test
+        working-directory: go
+        run: go test ./... -count=1 -timeout 120s
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Web-UI type check
+        working-directory: web-ui
+        run: |
+          npm ci
+          npx tsc --noEmit
+
   build:
+    needs: [ci-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: read
