@@ -16,6 +16,7 @@ import (
 	"github.com/baekenough/customclaw/internal/credprobe"
 	"github.com/baekenough/customclaw/internal/llm"
 	"github.com/baekenough/customclaw/internal/memory"
+	"github.com/baekenough/customclaw/internal/notify"
 	"github.com/baekenough/customclaw/internal/platform"
 	rediswrapper "github.com/baekenough/customclaw/internal/redis"
 	"github.com/baekenough/customclaw/internal/tools"
@@ -175,6 +176,12 @@ func run() error {
 
 	// Credential probe — periodically checks LLM provider credentials and
 	// stores results in the credential_status table. Fixes issue #32.
+	alertToken := os.Getenv("CUSTOMCLAW_SLACK_BOT_TOKEN")
+	alertChannel := os.Getenv("CREDENTIAL_ALERT_CHANNEL")
+	if alertChannel == "" {
+		alertChannel = "C0AMBNY135Z"
+	}
+	credprobe.SetAlertNotifier(notify.New(alertToken, alertChannel))
 	credprobe.Start(ctx, store.Pool())
 
 	// Analysis consumer — processes GitHub issue/PR analysis requests.
@@ -201,6 +208,10 @@ func run() error {
 		}
 		slog.Warn("hot-reload: bot not found in reloaded configs", "bot_id", botID)
 	})
+
+	// Drain legacy stream — catches any messages still in the old stream key
+	// from before the platform-messages migration. Exits automatically once empty.
+	go worker.DrainLegacyStream(ctx, rdb, consumerGroup, consumerName, dispatcher)
 
 	// Main consumer loop
 	slog.Info("consumer loop started")

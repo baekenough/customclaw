@@ -13,7 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 import redis
 import requests
-from slack_sdk import WebClient
+
+from bot_engine.notify import create_backend, NotifyBackend
 
 log = logging.getLogger(__name__)
 
@@ -164,59 +165,48 @@ def _get_driver_bot_info() -> tuple[str, str]:
         return "", ""
 
 
-_cached_bot_info: tuple[str, str] | None = None
+_notify_backend: NotifyBackend | None = None
 
 
-def _notify_slack(
+def _get_notify_backend() -> NotifyBackend:
+    """Get or create the notification backend using driver bot credentials."""
+    global _notify_backend
+    if _notify_backend is not None:
+        return _notify_backend
+    token, channel = _get_driver_bot_info()
+    _notify_backend = create_backend(
+        token=token,
+        channel=channel,
+        platform="slack" if token else "log",
+    )
+    return _notify_backend
+
+
+def _notify(
     text: str,
     issue_number: str = "",
     repo: str = "",
     thread_ts: str = "",
     emoji: str = "",
 ) -> str:
-    """Send a notification to the Slack channel. Best-effort, never blocks.
+    """Send a notification via the configured backend. Best-effort, never blocks.
 
-    Returns the message timestamp (thread_ts) for threading follow-ups.
-    Returns empty string on failure.
+    Returns the message timestamp for threading follow-ups, or "" on failure.
     """
-    global _cached_bot_info
-    if _cached_bot_info is None:
-        _cached_bot_info = _get_driver_bot_info()
+    backend = _get_notify_backend()
+    issue_link = ""
+    if issue_number and repo:
+        issue_link = f" (<https://github.com/{repo}/issues/{issue_number}|#{issue_number}>)"
 
-    bot_token, channel = _cached_bot_info
-    if not bot_token or not channel:
-        log.warning("Driver bot token/channel not available, skipping Slack notification")
-        return ""
-    try:
-        client = WebClient(token=bot_token)
-        issue_link = ""
-        if issue_number and repo:
-            issue_link = f" (<https://github.com/{repo}/issues/{issue_number}|#{issue_number}>)"
-
-        kwargs: dict = {
-            "channel": channel,
-            "text": f"{text}{issue_link}",
-            "unfurl_links": False,
-        }
-        if thread_ts:
-            kwargs["thread_ts"] = thread_ts
-
-        resp = client.chat_postMessage(**kwargs)
-        ts = resp.get("ts", "") if resp.get("ok") else ""
-        # Add emoji reaction if specified
-        if emoji and ts:
-            try:
-                client.reactions_add(
-                    channel=channel,
-                    name=emoji,
-                    timestamp=thread_ts if thread_ts else ts,
-                )
-            except Exception:
-                pass  # Best-effort
-        return ts
-    except Exception as e:
-        log.warning("Slack notification failed (non-blocking): %s", e)
-        return ""
+    ts = backend.send_message(
+        channel="",  # uses default channel from backend
+        text=f"{text}{issue_link}",
+        thread_ts=thread_ts,
+    )
+    if emoji and ts:
+        reaction_ts = thread_ts if thread_ts else ts
+        backend.add_reaction(channel="", timestamp=reaction_ts, emoji=emoji)
+    return ts
 
 
 def _search_relevant_code(issue_title: str, issue_body: str) -> str:
@@ -398,7 +388,7 @@ def _process_analysis(request: dict) -> None:
                 ),
             )
             _add_label(repo, issue_number, "professor")
-            _notify_slack(
+            _notify(
                 f"🎓 이슈 #{issue_number} 교수 종합 분석 완료",
                 issue_number, repo,
                 emoji="microscope",
@@ -844,7 +834,7 @@ def _process_pr_analysis(request: dict) -> None:
 
     log.info("Processing PR analysis for PR #%s: %s", pr_number, pr_title[:50])
 
-    start_ts = _notify_slack(
+    start_ts = _notify(
         f"🔍 PR #{pr_number} 정합성 분석 시작",
         issue_number=pr_number,
         repo=repo,
@@ -944,7 +934,7 @@ def _process_pr_analysis(request: dict) -> None:
         log.warning("PR colleague analysis returned no output for PR #%s", pr_number)
 
     # Step 6: Professor synthesizes both PR reviews
-    _notify_slack(
+    _notify(
         f"📝 PR #{pr_number} Architect + Colleague 분석 완료, Professor 종합 중...",
         issue_number=pr_number,
         repo=repo,
@@ -977,7 +967,7 @@ def _process_pr_analysis(request: dict) -> None:
                     f"---\n_Professor PR synthesis by Claude Code (opus) — omc_pr_analyzer_"
                 ),
             )
-            _notify_slack(
+            _notify(
                 f"🎓 PR #{pr_number} 교수 종합 분석 완료",
                 issue_number=pr_number,
                 repo=repo,

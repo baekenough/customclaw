@@ -13,7 +13,7 @@ Thank you for your interest in contributing to customclaw!
 
 | Component | Tech | Location |
 |-----------|------|----------|
-| Bot Engine | Python (slack-bolt) | `bot_engine/` |
+| Bot Engine | Python (platform-adapter) | `bot_engine/` |
 | Web Dashboard | Next.js 16 / React 19 | `web-ui/` |
 | Database | PostgreSQL (pgvector) | `migrations/` |
 | Search | OpenSearch (nori) | — |
@@ -116,7 +116,7 @@ Migration files live in `migrations/` and are applied in order. Follow the exist
 ```bash
 docker compose ps                     # All services status
 docker compose logs -f worker         # Worker logs
-docker compose logs -f slack-bolt     # Slack event listener logs
+docker compose logs -f platform-adapter     # Platform adapter logs
 docker compose exec postgres psql -U customclaw -d customclaw  # DB access
 ```
 
@@ -133,7 +133,7 @@ customclaw/
 ├── docker/
 │   ├── airflow/              # Airflow Dockerfile + entrypoint
 │   ├── opensearch/           # OpenSearch image with nori plugin
-│   ├── slack-bolt/           # Shared image: slack-bolt, worker
+│   ├── platform-adapter/     # Shared image: platform-adapter, worker
 │   └── web-ui/               # Next.js image
 ├── migrations/               # PostgreSQL migration SQL files (applied in order)
 ├── slack_bot/
@@ -243,7 +243,7 @@ Bot configuration files live in `bots/`. The reference schema is `bots/example.y
 After adding or modifying a bot YAML:
 
 ```bash
-docker compose restart slack-bolt worker
+docker compose restart platform-adapter worker
 ```
 
 Changes to bot config in the web UI (PostgreSQL) take effect on next message; no restart needed.

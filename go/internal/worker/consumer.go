@@ -10,7 +10,10 @@ import (
 
 const (
 	// StreamKey is the Redis Stream key where platform adapters publish messages.
-	StreamKey = "customclaw:slack-messages"
+	StreamKey = "customclaw:platform-messages"
+	// LegacyStreamKey is the old stream key retained for dual-read migration.
+	// Once all producers have migrated to StreamKey, this can be removed.
+	LegacyStreamKey = "customclaw:slack-messages"
 	// claimIdleTimeout is the idle duration after which unacknowledged messages
 	// are re-claimed by the current consumer.
 	claimIdleTimeout = 5 * time.Minute
@@ -106,6 +109,70 @@ func reclaimIdle(
 		// Do not XACK here. Reclaimed messages follow the same at-least-once
 		// path: the processFn ACKs them after successful processing.
 		dispatcher.Dispatch(ctx, incoming)
+	}
+}
+
+// DrainLegacyStream reads remaining messages from the old "customclaw:slack-messages"
+// stream key during the migration period. It joins the same consumer group so
+// at-least-once semantics are preserved. Once the pending count reaches zero the
+// goroutine exits — callers should start it with go and ignore the return.
+//
+// Safe to call even when the legacy stream does not exist: XGroupCreateMkStream
+// creates it empty if absent, and the drain loop exits immediately.
+func DrainLegacyStream(
+	ctx context.Context,
+	rdb *redis.Client,
+	group, consumer string,
+	dispatcher *Dispatcher,
+) {
+	// Ensure consumer group exists on the legacy stream.
+	_ = rdb.XGroupCreateMkStream(ctx, LegacyStreamKey, group, "0").Err()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		entries, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
+			Group:    group,
+			Consumer: consumer,
+			Streams:  []string{LegacyStreamKey, ">"},
+			Count:    readBatchSize,
+			Block:    5 * time.Second,
+			NoAck:    false,
+		}).Result()
+
+		if err != nil {
+			if err == redis.Nil || err == context.DeadlineExceeded {
+				// No new messages; check pending count before exiting.
+				pending, pendErr := rdb.XPending(ctx, LegacyStreamKey, group).Result()
+				if pendErr != nil || pending.Count == 0 {
+					slog.Info("legacy stream drain complete",
+						"stream", LegacyStreamKey)
+					return
+				}
+				continue
+			}
+			if ctx.Err() != nil {
+				return
+			}
+			slog.Warn("legacy stream drain error", "stream", LegacyStreamKey, "error", err)
+			time.Sleep(time.Second)
+			continue
+		}
+
+		for _, stream := range entries {
+			for _, msg := range stream.Messages {
+				incoming := decodeStreamMessage(msg)
+				dispatcher.Dispatch(ctx, incoming)
+				// ACK immediately — legacy drain is best-effort catch-up.
+				if ackErr := rdb.XAck(ctx, LegacyStreamKey, group, msg.ID).Err(); ackErr != nil {
+					slog.Warn("legacy stream: xack failed", "id", msg.ID, "error", ackErr)
+				}
+			}
+		}
 	}
 }
 

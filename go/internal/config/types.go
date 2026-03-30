@@ -71,7 +71,11 @@ type LLMKeys struct {
 type BotConfig struct {
 	ID            string           `yaml:"id"              json:"id"`
 	Name          string           `yaml:"name"            json:"name"`
+	// SlackAppToken is the Slack Socket Mode app-level token.
+	// Deprecated: use Credentials["app_token"] for new integrations.
 	SlackAppToken string           `yaml:"slack_app_token" json:"slack_app_token"`
+	// SlackBotToken is the Slack bot user OAuth token.
+	// Deprecated: use Credentials["bot_token"] for new integrations.
 	SlackBotToken string           `yaml:"slack_bot_token" json:"slack_bot_token"`
 	// Platform selects the messaging backend: "slack", "mattermost", or "discord".
 	Platform      string           `yaml:"platform"        json:"platform"`
@@ -86,6 +90,10 @@ type BotConfig struct {
 	Memory        MemoryConfig     `yaml:"memory"          json:"memory"`
 	Security      SecurityConfig   `yaml:"security"        json:"security"`
 	LLMKeys       LLMKeys          `yaml:"-"               json:"-"` // per-bot API keys, never serialized
+	// Credentials holds platform-specific credentials as key-value pairs.
+	// Preferred over SlackAppToken/SlackBotToken for new integrations.
+	// Populated automatically from legacy fields by defaults().
+	Credentials   map[string]string `yaml:"credentials" json:"credentials,omitempty"`
 }
 
 // defaults applies zero-value defaults that mirror the Python dataclass defaults.
@@ -110,5 +118,21 @@ func (c *BotConfig) defaults() {
 	// YAML, so we cannot safely override it here after parsing has run.
 	if c.Mattermost.Port == 0 {
 		c.Mattermost.Port = 8065
+	}
+
+	// Populate Credentials map from legacy Slack fields for backward compatibility.
+	// New platform adapters should read from Credentials instead of SlackAppToken/SlackBotToken.
+	if c.Credentials == nil {
+		c.Credentials = make(map[string]string)
+	}
+	if c.SlackAppToken != "" {
+		if _, ok := c.Credentials["app_token"]; !ok {
+			c.Credentials["app_token"] = c.SlackAppToken
+		}
+	}
+	if c.SlackBotToken != "" {
+		if _, ok := c.Credentials["bot_token"]; !ok {
+			c.Credentials["bot_token"] = c.SlackBotToken
+		}
 	}
 }

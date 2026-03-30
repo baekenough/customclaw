@@ -8,22 +8,28 @@ import (
 	"sync"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/slack-go/slack"
+
+	"github.com/baekenough/customclaw/internal/notify"
 )
 
-// driverBotID is the bot whose token is used for Slack notifications.
 const driverBotID = "omcustomdriver"
 
-// botInfo caches the Slack bot token and channel fetched from the database.
+// botInfo caches the notification bot token and default channel.
 type botInfo struct {
 	token   string
 	channel string
 }
 
 var (
-	cachedBotInfo botInfo
-	botInfoOnce   sync.Once
+	cachedNotifier notify.Notifier
+	notifierOnce   sync.Once
 )
+
+// initNotifier creates the notification backend from DB or env credentials.
+func initNotifier(ctx context.Context) notify.Notifier {
+	info := loadBotInfo(ctx)
+	return notify.New(info.token, info.channel)
+}
 
 // loadBotInfo fetches the driver bot token + first channel from PostgreSQL.
 // Falls back to env vars SLACK_BOT_TOKEN / SLACK_CHANNEL on any error.
@@ -35,13 +41,13 @@ func loadBotInfo(ctx context.Context) botInfo {
 	}
 
 	if databaseDSN == "" {
-		slog.Warn("slack: DATABASE_DSN not set, cannot fetch driver bot info")
+		slog.Warn("notify: DATABASE_DSN not set, cannot fetch driver bot info")
 		return envBotInfo()
 	}
 
 	conn, err := pgx.Connect(ctx, databaseDSN)
 	if err != nil {
-		slog.Warn("slack: db connect failed", "error", err)
+		slog.Warn("notify: db connect failed", "error", err)
 		return envBotInfo()
 	}
 	defer func() { _ = conn.Close(ctx) }()
@@ -53,7 +59,7 @@ func loadBotInfo(ctx context.Context) botInfo {
 		botID,
 	).Scan(&token, &channels)
 	if err != nil {
-		slog.Warn("slack: driver bot not found or query error", "bot_id", botID, "error", err)
+		slog.Warn("notify: driver bot not found or query error", "bot_id", botID, "error", err)
 		return envBotInfo()
 	}
 
@@ -72,23 +78,16 @@ func envBotInfo() botInfo {
 	}
 }
 
-// notifySlack sends a Slack notification. It is best-effort: errors are logged
-// but not returned. Returns the thread_ts of the posted message, or "".
+// sendNotification sends a notification via the configured backend.
+// Best-effort: errors are logged but not returned.
+// Returns the thread_ts of the posted message, or "".
 // channelOverride, when non-empty, overrides the channel loaded from the database.
-func notifySlack(ctx context.Context, text, issueNumber, repo, threadTS, emoji, channelOverride string) string {
-	botInfoOnce.Do(func() {
-		cachedBotInfo = loadBotInfo(ctx)
+func sendNotification(ctx context.Context, text, issueNumber, repo, threadTS, emoji, channelOverride string) string {
+	notifierOnce.Do(func() {
+		cachedNotifier = initNotifier(ctx)
 	})
 
-	info := cachedBotInfo
-	channel := info.channel
-	if channelOverride != "" {
-		channel = channelOverride
-	}
-	if info.token == "" || channel == "" {
-		slog.Warn("slack: token/channel unavailable, skipping notification")
-		return ""
-	}
+	channel := channelOverride // override takes precedence
 
 	msgText := text
 	if issueNumber != "" && repo != "" {
@@ -98,33 +97,18 @@ func notifySlack(ctx context.Context, text, issueNumber, repo, threadTS, emoji, 
 		)
 	}
 
-	client := slack.New(info.token)
-
-	opts := []slack.MsgOption{
-		slack.MsgOptionText(msgText, false),
-		slack.MsgOptionDisableLinkUnfurl(),
-	}
-	if threadTS != "" {
-		opts = append(opts, slack.MsgOptionTS(threadTS))
-	}
-
-	_, ts, err := client.PostMessageContext(ctx, channel, opts...)
+	ts, err := cachedNotifier.SendMessage(ctx, channel, msgText, threadTS)
 	if err != nil {
-		slog.Warn("slack: post message failed (non-blocking)", "error", err)
+		slog.Warn("notify: send message failed (non-blocking)", "error", err)
 		return ""
 	}
 
-	// Add emoji reaction if specified.
 	if emoji != "" && ts != "" {
 		reactionTS := threadTS
 		if reactionTS == "" {
 			reactionTS = ts
 		}
-		if reactErr := client.AddReactionContext(ctx, emoji,
-			slack.ItemRef{Channel: channel, Timestamp: reactionTS},
-		); reactErr != nil {
-			slog.Debug("slack: add reaction failed (non-blocking)", "error", reactErr)
-		}
+		_ = cachedNotifier.AddReaction(ctx, channel, reactionTS, emoji)
 	}
 
 	return ts

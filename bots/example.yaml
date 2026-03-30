@@ -4,11 +4,11 @@
 #
 # Usage:
 #   cp bots/example.yaml bots/my-bot.yaml
-#   # Edit the file, then restart: docker compose restart slack-bolt worker
+#   # Edit the file, then restart: docker compose restart platform-adapter worker
 
 name: example-bot                        # Unique bot ID (kebab-case)
 
-# Platform: "slack" (default) or "mattermost"
+# Platform: "slack", "discord", or "mattermost"
 # platform: slack
 
 # Mattermost configuration (uncomment if platform: mattermost)

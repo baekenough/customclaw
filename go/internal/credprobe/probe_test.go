@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/baekenough/customclaw/internal/notify"
 )
 
 // ---------------------------------------------------------------------------
@@ -348,8 +350,8 @@ func TestMaybeAlert_Transitions(t *testing.T) {
 		{"degraded to error", "test-provider", "error", "degraded"},
 	}
 
-	// Unset Slack token so sendSlackAlert is a no-op.
-	t.Setenv("CUSTOMCLAW_SLACK_BOT_TOKEN", "")
+	// Use LogNotifier so sendAlert is a no-op (no real network calls).
+	SetAlertNotifier(notify.NewLogNotifier())
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -371,7 +373,8 @@ func TestMaybeAlert_DegradedDoesNotAlert(t *testing.T) {
 	stateTracker.states = make(map[string]string)
 	stateTracker.mu.Unlock()
 
-	t.Setenv("CUSTOMCLAW_SLACK_BOT_TOKEN", "")
+	// Use LogNotifier so sendAlert is a no-op (no real network calls).
+	SetAlertNotifier(notify.NewLogNotifier())
 
 	// Transition from ok to degraded should NOT trigger alert.
 	maybeAlert("degrade-test", "ok", "")

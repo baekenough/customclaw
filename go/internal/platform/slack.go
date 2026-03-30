@@ -15,7 +15,7 @@ import (
 	"github.com/baekenough/customclaw/internal/config"
 )
 
-const slackStreamKey = "customclaw:slack-messages"
+const slackStreamKey = "customclaw:platform-messages"
 
 // SlackAdapter listens for Slack messages via Socket Mode and publishes them
 // to the Redis Stream for downstream processing.

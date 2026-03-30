@@ -4,7 +4,7 @@
 
 ## 1. 시스템 개요
 
-CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나의 인프라에서 운영하면서 각 봇이 독립적인 퍼소나·프로젝트 컨텍스트·도구 세트를 가질 수 있도록 설계되어 있습니다. Discord, Mattermost 플랫폼 어댑터를 기본 지원하며, Slack 어댑터는 선택적(optional) 의존성입니다. 플랫폼 어댑터는 `PlatformRegistry` 패턴으로 런타임에 등록되어 플랫폼별 하드코딩 없이 어댑터/퍼블리셔를 생성합니다. 사용자 메시지는 플랫폼별 어댑터를 통해 수신되고, Redis Stream(`customclaw:slack-messages` — Phase 4에서 `customclaw:platform-messages`로 리네임 예정)을 거쳐 Worker로 비동기 전달됩니다. **Primary Worker는 Go**(`go/cmd/worker/main.go`)로 마이그레이션 완료되었으며, Python worker는 deprecated 상태입니다. Worker는 Claude CLI(Anthropic) 또는 Codex CLI(OpenAI)를 subprocess로 호출해 응답을 생성하며, 대화 이력은 PostgreSQL에, 장기 기억은 PostgreSQL(pgvector 임베딩) + OpenSearch(한국어 nori 키워드 검색)의 하이브리드 구조로 저장됩니다. Docker 이미지는 AWS ECR(`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com`)에서 관리됩니다. Airflow는 GitHub 이슈 분석·릴리즈 모니터링·공식 문서 변경 감지 등 자동화 DAG 9개를 담당하고, Next.js 기반 Web UI가 봇 관리와 모니터링 기능을 제공합니다.
+CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나의 인프라에서 운영하면서 각 봇이 독립적인 퍼소나·프로젝트 컨텍스트·도구 세트를 가질 수 있도록 설계되어 있습니다. Discord, Mattermost 플랫폼 어댑터를 기본 지원하며, Slack 어댑터는 선택적(optional) 의존성입니다. 플랫폼 어댑터는 `PlatformRegistry` 패턴으로 런타임에 등록되어 플랫폼별 하드코딩 없이 어댑터/퍼블리셔를 생성합니다. 사용자 메시지는 플랫폼별 어댑터를 통해 수신되고, Redis Stream(`customclaw:platform-messages`)을 거쳐 Worker로 비동기 전달됩니다. **Primary Worker는 Go**(`go/cmd/worker/main.go`)로 마이그레이션 완료되었으며, Python worker는 deprecated 상태입니다. Worker는 Claude CLI(Anthropic) 또는 Codex CLI(OpenAI)를 subprocess로 호출해 응답을 생성하며, 대화 이력은 PostgreSQL에, 장기 기억은 PostgreSQL(pgvector 임베딩) + OpenSearch(한국어 nori 키워드 검색)의 하이브리드 구조로 저장됩니다. Docker 이미지는 AWS ECR(`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com`)에서 관리됩니다. Airflow는 GitHub 이슈 분석·릴리즈 모니터링·공식 문서 변경 감지 등 자동화 DAG 9개를 담당하고, Next.js 기반 Web UI가 봇 관리와 모니터링 기능을 제공합니다.
 
 ---
 
@@ -26,10 +26,10 @@ CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나
 
 `BotManager`는 `/app/bots/*.yaml` 파일을 로드하고, `PlatformRegistry`를 통해 플랫폼별 어댑터를 초기화합니다. 각 플랫폼 어댑터 모듈은 import 시점에 `PlatformRegistry.register()`로 자기 자신을 등록하므로, 플랫폼 추가/제거 시 중앙 코드 변경이 필요 없습니다.
 
-**Slack 어댑터** (optional): `slack-bolt`은 선택적 의존성으로, `platforms/__init__.py`에서 `try/except ImportError`로 import됩니다. `_build_slack_adapters()`도 `try/except`로 감싸여 Slack 라이브러리 없이도 시스템이 정상 동작합니다. 각 봇에 대해 `BotRunner` 인스턴스를 생성한 뒤 별도 스레드에서 Slack Socket Mode Handler를 시작합니다.
+**Slack 어댑터** (optional): `slack-bolt`(platform-adapter 서비스)은 선택적 의존성으로, `platforms/__init__.py`에서 `try/except ImportError`로 import됩니다. `_build_slack_adapters()`도 `try/except`로 감싸여 Slack 라이브러리 없이도 시스템이 정상 동작합니다. 각 봇에 대해 `BotRunner` 인스턴스를 생성한 뒤 별도 스레드에서 Slack Socket Mode Handler를 시작합니다.
 - `message` 이벤트를 수신하고 `subtype`이 있는 메시지(봇 메시지, 수정 이벤트 등)는 무시합니다.
 - `security.allowed_channels` / `security.allowed_users` 필터를 적용합니다.
-- 검증을 통과한 메시지를 `customclaw:slack-messages` Redis Stream에 `xadd`합니다 (Phase 4에서 `customclaw:platform-messages`로 리네임 예정).
+- 검증을 통과한 메시지를 `customclaw:platform-messages` Redis Stream에 `xadd`합니다.
 - 처리 중 ⏳ 리액션을 추가해 사용자에게 진행 상황을 알립니다.
 
 **Discord 어댑터** (`platforms/discord_adapter.py`): `discord.py` 라이브러리 기반. `DiscordConfig`의 `token`으로 연결하고, `guild_id`로 서버를 제한합니다. `security.mention_only: true` 설정 시 봇 멘션이 포함된 메시지만 처리합니다.
@@ -42,7 +42,7 @@ CustomClaw는 멀티플랫폼 멀티봇 AI 플랫폼으로, 여러 봇을 하나
 
 **Primary Worker는 Go** (`go/cmd/worker/main.go`)로 마이그레이션 완료되었습니다. Python worker (`bot_engine/worker.py`)는 deprecated이며 `profiles: [legacy]`로 프로파일 아웃되어 있습니다.
 
-Go worker는 Redis Consumer Group(`customclaw-workers`) 방식으로 `customclaw:slack-messages` 스트림을 소비합니다 (Phase 4에서 `customclaw:platform-messages`로 리네임 예정). `docker-compose.go-shadow.yml`로 실행되며, 여러 Worker 인스턴스를 병렬 실행하면 자동으로 부하가 분산됩니다.
+Go worker는 Redis Consumer Group(`customclaw-workers`) 방식으로 `customclaw:platform-messages` 스트림을 소비합니다. `docker-compose.go-shadow.yml`로 실행되며, 여러 Worker 인스턴스를 병렬 실행하면 자동으로 부하가 분산됩니다.
 
 `_get_publisher()`(Python) / `PublisherFactory`(Go)는 `PlatformRegistry` 패턴을 사용하여 플랫폼별 퍼블리셔를 생성합니다. 등록되지 않은 플랫폼에는 `NoOpResponsePublisher`를 반환하여 안전하게 폴백합니다.
 
@@ -193,8 +193,7 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 ```
 1. [수신] 플랫폼 사용자 메시지 (Discord / Mattermost / Slack)
       → PlatformAdapter: 채널·사용자 권한 검증
-      → Redis Stream xadd (customclaw:slack-messages)
-        (Phase 4에서 customclaw:platform-messages로 리네임 예정)
+      → Redis Stream xadd (customclaw:platform-messages)
 
 2. [큐잉] Redis Stream
       → Consumer Group: customclaw-workers
@@ -241,7 +240,7 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 |--------|------|------------|
 | `messages` | 모든 대화 메시지 저장 (soft delete 지원). `deleted_at`, `edited_at`, `original_content` 컬럼으로 삭제/수정 이력 추적 | `(bot_id, channel_id, thread_ts)`, `(bot_id, platform_message_id)`, HNSW cosine 임베딩 |
 | `memories` | 자동 추출된 장기 기억. `source_message_id`로 원본 메시지 연결. BM25 + kNN 하이브리드 검색. CDC 삭제/수정 cascade 지원 | `(bot_id)`, `(source_message_id)`, `(embedding_version)`, HNSW cosine 임베딩 |
-| `bots` | 봇 설정 원장. Web UI에서 CRUD. slack-bolt는 YAML을 우선 사용 | Primary Key(id) |
+| `bots` | 봇 설정 원장. Web UI에서 CRUD. platform-adapter는 YAML을 우선 사용 | Primary Key(id) |
 | `api_usage_logs` | LLM API 호출 비용 추적 | `(bot_id, created_at)` |
 
 **OpenSearch 인덱스 (`customclaw-memories`):**
@@ -275,11 +274,11 @@ Docker 이미지는 AWS ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/
 | airflow | customclaw/airflow:develop (ECR) | **Active** | |
 | web-ui | customclaw/web-ui:develop (ECR) | **Active** | |
 | go-worker | go/Dockerfile (로컬 빌드) | **Active (Primary)** | `docker-compose.go-shadow.yml` |
-| slack-bolt | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | Slack 어댑터 |
-| worker (Python) | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [legacy]`) | Deprecated |
-| claude-analyzer | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
-| codex-analyzer | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
-| gemini-analyzer | customclaw/slack-bolt:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
+| platform-adapter | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | 플랫폼 어댑터 (Renamed from slack-bolt in v1.0.0) |
+| worker (Python) | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [legacy]`) | Deprecated |
+| claude-analyzer | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
+| codex-analyzer | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
+| gemini-analyzer | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
 | watchtower | nickfedor/watchtower | Profiled out (`profiles: [auto-update]`) | 자동 이미지 업데이트 |
 
 ### 헬스체크
@@ -292,13 +291,13 @@ Docker 이미지는 AWS ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/
 | airflow | `curl -sf http://localhost:8080/` |
 | web-ui | `node -e "fetch('http://localhost:3000')..."` |
 | go-worker | `kill -0 1` (프로세스 존재 확인) |
-| slack-bolt / analyzers | Redis 연결 확인 (Python socket connect) |
+| platform-adapter / analyzers | Redis 연결 확인 (Python socket connect) |
 
 ### 주요 볼륨 마운트
 
 | 볼륨/경로 | 서비스 | 목적 |
 |-----------|--------|------|
-| `./bots:/app/bots` | go-worker, slack-bolt | 봇 YAML 설정 파일 실시간 반영 |
+| `./bots:/app/bots` | go-worker, platform-adapter | 봇 YAML 설정 파일 실시간 반영 |
 | `${HOST_WORKSPACE_PATH}:${CONTAINER_HOME}/workspace` | go-worker, airflow | Git 리포지토리 공유 |
 | `${CLAUDE_CONFIG_DIR}:${CONTAINER_HOME}/.claude` | go-worker | Claude CLI 설정·인증 |
 | `${CLAUDE_CREDENTIALS_FILE}:${CONTAINER_HOME}/.claude.json` | go-worker | Claude CLI 자격증명 |
@@ -327,13 +326,13 @@ Docker 이미지는 AWS ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/
 
 | 변수 | 서비스 | 설명 |
 |------|--------|------|
-| `DATABASE_DSN` | go-worker, slack-bolt | PostgreSQL 연결 문자열 |
+| `DATABASE_DSN` | go-worker, platform-adapter | PostgreSQL 연결 문자열 |
 | `REDIS_URL` | 전체 | Redis 연결 URL |
 | `OPENSEARCH_URL` | go-worker | OpenSearch 엔드포인트 |
 | `OPENSEARCH_ADMIN_PASSWORD` | opensearch | OpenSearch 초기 관리자 비밀번호 |
 | `ANTHROPIC_API_KEY` | airflow | Claude API 인증 |
 | `VOYAGE_API_KEY` | (미사용) | 임베딩 API (미래 pgvector 활성화용) |
-| `ENCRYPTION_KEY` | slack-bolt | 토큰 암호화 키 |
+| `ENCRYPTION_KEY` | platform-adapter | 토큰 암호화 키 |
 | `GITHUB_TOKEN` | go-worker, airflow | GitHub API 인증 |
 | `AIRFLOW_API_URL` | web-ui | Airflow REST API 엔드포인트 |
 | `NEXTAUTH_URL` | web-ui | NextAuth 콜백 기본 URL |

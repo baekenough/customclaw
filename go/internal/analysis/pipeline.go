@@ -157,7 +157,7 @@ func processAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Prov
 			if err := addLabel(ctx, repo, issueNumber, "professor"); err != nil {
 				slog.Warn("analysis: add label failed", "issue", issueNumber, "error", err)
 			}
-			notifySlack(ctx,
+			sendNotification(ctx,
 				fmt.Sprintf("🎓 이슈 #%s 교수 종합 분석 완료", issueNumber),
 				issueNumber, repo, "", "microscope", req.SlackChannel,
 			)
@@ -189,7 +189,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 
 	slog.Info("analysis: processing PR", "pr", prNumber, "title", truncate(req.PRTitle, 50))
 
-	startTS := notifySlack(ctx,
+	startTS := sendNotification(ctx,
 		fmt.Sprintf("🔍 PR #%s 정합성 분석 시작", prNumber),
 		prNumber, repo, "", "", req.SlackChannel,
 	)
@@ -313,7 +313,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 	}
 
 	// Notify Slack mid-way.
-	notifySlack(ctx,
+	sendNotification(ctx,
 		fmt.Sprintf("📝 PR #%s Architect + Colleague 분석 완료, Professor 종합 중...", prNumber),
 		prNumber, repo, startTS, "", req.SlackChannel,
 	)
@@ -342,7 +342,7 @@ func processPRAnalysis(ctx context.Context, req AnalysisRequest, provider llm.Pr
 			if err := postGithubComment(ctx, repo, prNumber, profBody); err != nil {
 				slog.Warn("analysis: post PR professor comment failed", "pr", prNumber, "error", err)
 			}
-			notifySlack(ctx,
+			sendNotification(ctx,
 				fmt.Sprintf("🎓 PR #%s 교수 종합 분석 완료", prNumber),
 				prNumber, repo, startTS, "white_check_mark", req.SlackChannel,
 			)

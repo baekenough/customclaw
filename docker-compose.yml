@@ -85,8 +85,10 @@ services:
       retries: 3
       start_period: 30s
 
-  slack-bolt:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
+  platform-adapter:
+    # NOTE: ECR repo customclaw/platform-adapter must be created before first push.
+    # Run: aws ecr create-repository --repository-name customclaw/platform-adapter --region ap-northeast-2
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/platform-adapter:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 120s
@@ -115,7 +117,7 @@ services:
       start_period: 10s
 
   worker:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/platform-adapter:develop
     restart: unless-stopped
     profiles: [legacy]
     stop_grace_period: 120s
@@ -191,7 +193,7 @@ services:
       start_period: 30s
 
   claude-analyzer:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/platform-adapter:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 30s
@@ -224,7 +226,7 @@ services:
       start_period: 10s
 
   codex-analyzer:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/platform-adapter:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 30s
@@ -256,7 +258,7 @@ services:
       start_period: 10s
 
   gemini-analyzer:
-    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/slack-bolt:develop
+    image: 849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/platform-adapter:develop
     restart: unless-stopped
     profiles: [slack]
     stop_grace_period: 30s
