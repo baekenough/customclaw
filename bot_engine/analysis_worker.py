@@ -134,6 +134,8 @@ def _consume_loop(redis_client: redis.Redis) -> None:
 def _get_driver_bot_info() -> tuple[str, str]:
     """Fetch omcustom-driver bot token and channel from the database.
 
+    Prefers the platform-agnostic ``credentials->>'bot_token'`` column;
+    falls back to the legacy ``slack_bot_token`` column for existing rows.
     Returns (bot_token, channel_id). Falls back to empty strings on error.
     """
     if not DATABASE_DSN:
@@ -146,7 +148,9 @@ def _get_driver_bot_info() -> tuple[str, str]:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT slack_bot_token, channels FROM bots WHERE id = %s AND is_active = true",
+                    """SELECT COALESCE(credentials->>'bot_token', slack_bot_token, ''),
+                              channels, platform
+                       FROM bots WHERE id = %s AND is_active = true""",
                     (DRIVER_BOT_ID,),
                 )
                 row = cur.fetchone()
@@ -165,6 +169,32 @@ def _get_driver_bot_info() -> tuple[str, str]:
         return "", ""
 
 
+def _get_driver_bot_platform() -> str:
+    """Fetch the platform field for the driver bot from the database.
+
+    Returns the platform string (e.g. "slack") or "" on error.
+    """
+    if not DATABASE_DSN:
+        return ""
+    try:
+        import psycopg2
+
+        conn = psycopg2.connect(DATABASE_DSN)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT platform FROM bots WHERE id = %s AND is_active = true",
+                    (DRIVER_BOT_ID,),
+                )
+                row = cur.fetchone()
+                return (row[0] or "") if row else ""
+        finally:
+            conn.close()
+    except Exception as e:
+        log.warning("Failed to fetch driver bot platform: %s", e)
+        return ""
+
+
 _notify_backend: NotifyBackend | None = None
 
 
@@ -174,10 +204,13 @@ def _get_notify_backend() -> NotifyBackend:
     if _notify_backend is not None:
         return _notify_backend
     token, channel = _get_driver_bot_info()
+    # Use the bot's actual platform field; fall back to infer from token presence.
+    bot_platform = _get_driver_bot_platform()
+    platform = bot_platform or ("slack" if token else "log")
     _notify_backend = create_backend(
         token=token,
         channel=channel,
-        platform="slack" if token else "log",
+        platform=platform,
     )
     return _notify_backend
 

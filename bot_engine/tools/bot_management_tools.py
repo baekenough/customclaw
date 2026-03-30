@@ -37,9 +37,11 @@ class CreateBotTool(BaseTool):
         return ToolDefinition(
             name="create_bot",
             description=(
-                "Create a new Slack bot configuration. The user must first create a Slack App "
-                "at api.slack.com/apps and provide the app token and bot token. "
-                "Guide them through the process if they haven't done it yet."
+                "Create a new bot configuration. Supports Slack, Mattermost, and Discord. "
+                "Provide the platform and credentials dict for the chosen platform. "
+                "For Slack: credentials must include app_token (xapp-...) and bot_token (xoxb-...). "
+                "For Mattermost: credentials must include url and token. "
+                "For Discord: credentials must include token."
             ),
             input_schema={
                 "type": "object",
@@ -52,13 +54,27 @@ class CreateBotTool(BaseTool):
                         "type": "string",
                         "description": "Display name for the bot",
                     },
+                    "platform": {
+                        "type": "string",
+                        "enum": ["slack", "mattermost", "discord"],
+                        "description": "Target platform for the bot",
+                    },
+                    "credentials": {
+                        "type": "object",
+                        "description": (
+                            "Platform credentials. "
+                            "Slack: {app_token, bot_token}. "
+                            "Mattermost: {url, token, port?}. "
+                            "Discord: {token, guild_id?}."
+                        ),
+                    },
                     "slack_app_token": {
                         "type": "string",
-                        "description": "Slack App-Level Token (xapp-...)",
+                        "description": "Deprecated. Use credentials.app_token instead.",
                     },
                     "slack_bot_token": {
                         "type": "string",
-                        "description": "Slack Bot User OAuth Token (xoxb-...)",
+                        "description": "Deprecated. Use credentials.bot_token instead.",
                     },
                     "personality": {
                         "type": "string",
@@ -93,39 +109,62 @@ class CreateBotTool(BaseTool):
                         "default": "sonnet",
                     },
                 },
-                "required": [
-                    "bot_id",
-                    "name",
-                    "slack_app_token",
-                    "slack_bot_token",
-                    "personality",
-                ],
+                "required": ["bot_id", "name", "platform", "personality"],
             },
         )
+
+    def _resolve_credentials(self, kwargs: dict) -> dict:
+        """Resolve credentials from either the unified dict or legacy Slack fields."""
+        credentials = dict(kwargs.get("credentials") or {})
+        if not credentials:
+            # Backward compat: promote legacy Slack token fields to credentials
+            slack_app_token = kwargs.get("slack_app_token", "")
+            slack_bot_token = kwargs.get("slack_bot_token", "")
+            if slack_app_token or slack_bot_token:
+                credentials = {
+                    "app_token": slack_app_token,
+                    "bot_token": slack_bot_token,
+                }
+        return credentials
+
+    def _validate_credentials(self, platform: str, credentials: dict) -> str | None:
+        """Return an error message if credentials are invalid, else None."""
+        if platform == "slack":
+            app_token = credentials.get("app_token", "")
+            bot_token = credentials.get("bot_token", "")
+            if not app_token or not app_token.startswith("xapp-"):
+                return "Slack credentials.app_token is required and must start with 'xapp-'."
+            if not bot_token or not bot_token.startswith("xoxb-"):
+                return "Slack credentials.bot_token is required and must start with 'xoxb-'."
+        elif platform == "mattermost":
+            if not credentials.get("url") or not credentials.get("token"):
+                return "Mattermost credentials must include 'url' and 'token'."
+        elif platform == "discord":
+            if not credentials.get("token"):
+                return "Discord credentials must include 'token'."
+        return None
 
     def execute(self, **kwargs) -> ToolResult:
         bot_id = kwargs.get("bot_id", "")
         name = kwargs.get("name", "")
-        slack_app_token = kwargs.get("slack_app_token", "")
-        slack_bot_token = kwargs.get("slack_bot_token", "")
+        platform = kwargs.get("platform", "")
         personality = kwargs.get("personality", "")
         github_repo = kwargs.get("github_repo", "")
         repo_path = kwargs.get("repo_path", "")
         tools_enabled = kwargs.get("tools_enabled", [])
         model = kwargs.get("model", "sonnet")
 
-        if (
-            not bot_id
-            or not slack_app_token.startswith("xapp-")
-            or not slack_bot_token.startswith("xoxb-")
-        ):
-            return ToolResult(
-                content=(
-                    "Invalid input. bot_id is required, slack_app_token must start with "
-                    "'xapp-', slack_bot_token must start with 'xoxb-'."
-                ),
-                is_error=True,
-            )
+        if not bot_id:
+            return ToolResult(content="bot_id is required.", is_error=True)
+
+        credentials = self._resolve_credentials(kwargs)
+        error = self._validate_credentials(platform, credentials)
+        if error:
+            return ToolResult(content=error, is_error=True)
+
+        # Preserve legacy columns for Slack bots to support old schema readers
+        slack_app_token = credentials.get("app_token", "") if platform == "slack" else ""
+        slack_bot_token = credentials.get("bot_token", "") if platform == "slack" else ""
 
         conn = _get_db_conn()
         if not conn:
@@ -143,8 +182,9 @@ class CreateBotTool(BaseTool):
                 cur.execute(
                     """INSERT INTO bots
                         (id, name, slack_app_token, slack_bot_token, channels,
-                         persona, project, tools, claude, memory, security, is_active)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true)""",
+                         persona, project, tools, claude, memory, security,
+                         platform, credentials, is_active)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, true)""",
                     (
                         bot_id,
                         name,
@@ -161,6 +201,8 @@ class CreateBotTool(BaseTool):
                             "allowed_users": [],
                             "dangerous_tools": ["trigger_dag", "create_issue"],
                         }),
+                        platform,
+                        json.dumps(credentials),
                     ),
                 )
             conn.commit()
@@ -171,11 +213,11 @@ class CreateBotTool(BaseTool):
                 content=(
                     f"Bot '{bot_id}' created successfully!\n"
                     f"- Name: {name}\n"
+                    f"- Platform: {platform}\n"
                     f"- Model: {model}\n"
                     f"- Tools: {', '.join(tools_enabled)}\n"
                     f"- GitHub: {github_repo or 'not configured'}\n\n"
-                    f"The bot runtime restart was requested automatically.\n"
-                    f"Make sure to invite the bot to the target channel with /invite @{name}"
+                    "The bot runtime restart was requested automatically."
                 )
             )
         except Exception as e:
@@ -386,7 +428,7 @@ class DeleteBotTool(BaseTool):
         return ToolDefinition(
             name="delete_bot",
             description=(
-                "Deactivate (soft-delete) a bot. The bot will disconnect from Slack."
+                "Deactivate (soft-delete) a bot. The bot will stop responding on its platform."
             ),
             input_schema={
                 "type": "object",

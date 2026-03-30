@@ -21,14 +21,19 @@ log = logging.getLogger(__name__)
 
 # Environment variable names
 _ENV_DATABASE_DSN = "DATABASE_DSN"
-_ENV_SLACK_TOKEN = "CUSTOMCLAW_SLACK_BOT_TOKEN"
-_ENV_ALERT_CHANNEL = "CREDENTIAL_ALERT_CHANNEL"
+# Preferred name — platform-agnostic.  Legacy name kept for backward compat.
+_ENV_ALERT_TOKEN = "ALERT_BOT_TOKEN"
+_ENV_ALERT_TOKEN_LEGACY = "CUSTOMCLAW_SLACK_BOT_TOKEN"
+# Preferred name — generic channel.  Legacy name kept for backward compat.
+_ENV_ALERT_CHANNEL = "ALERT_CHANNEL"
+_ENV_ALERT_CHANNEL_LEGACY = "CREDENTIAL_ALERT_CHANNEL"
+# Optional: explicit platform override ("slack", "log", etc.)
+_ENV_ALERT_PLATFORM = "ALERT_PLATFORM"
 _ENV_CLAUDE_CLI_PATH = "CLAUDE_CLI_PATH"
 _ENV_CONTAINER_HOME = "CONTAINER_HOME"
 _ENV_OPENAI_API_KEY = "OPENAI_API_KEY"
 _ENV_GEMINI_API_KEY = "GEMINI_API_KEY"
 
-_DEFAULT_ALERT_CHANNEL = "C0AMBNY135Z"
 _DEFAULT_CLAUDE_CLI = "claude"
 _DEFAULT_CONTAINER_HOME = "/home/appuser"
 
@@ -42,12 +47,21 @@ _alert_backend: NotifyBackend | None = None
 def _get_alert_backend() -> NotifyBackend:
     global _alert_backend
     if _alert_backend is None:
-        token = os.environ.get(_ENV_SLACK_TOKEN, "")
-        channel = os.environ.get(_ENV_ALERT_CHANNEL, _DEFAULT_ALERT_CHANNEL)
+        # Prefer platform-agnostic names; fall back to legacy Slack-specific names.
+        token = (
+            os.environ.get(_ENV_ALERT_TOKEN)
+            or os.environ.get(_ENV_ALERT_TOKEN_LEGACY, "")
+        )
+        channel = (
+            os.environ.get(_ENV_ALERT_CHANNEL)
+            or os.environ.get(_ENV_ALERT_CHANNEL_LEGACY, "")
+        )
+        # Platform can be set explicitly; otherwise infer from token presence.
+        platform = os.environ.get(_ENV_ALERT_PLATFORM) or ("slack" if token else "log")
         _alert_backend = create_backend(
             token=token,
             channel=channel,
-            platform="slack" if token else "log",
+            platform=platform,
         )
     return _alert_backend
 

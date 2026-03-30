@@ -46,6 +46,7 @@ export async function POST(request: NextRequest) {
       slackBotToken,
       discord,
       mattermost,
+      credentials,
       channels,
       persona,
       project,
@@ -60,39 +61,58 @@ export async function POST(request: NextRequest) {
       geminiApiKey,
     } = body;
 
-    const resolvedPlatform = platform ?? "slack";
-
     if (!id || !name) {
       return Response.json({ error: "id and name are required" }, { status: 400 });
     }
-    if (resolvedPlatform === "slack" && (!slackAppToken || !slackBotToken)) {
-      return Response.json(
-        { error: "slackAppToken and slackBotToken are required for Slack bots" },
-        { status: 400 }
-      );
+    if (!platform) {
+      return Response.json({ error: "platform is required" }, { status: 400 });
     }
-    if (resolvedPlatform === "discord" && !discord?.token) {
-      return Response.json(
-        { error: "discord.token is required for Discord bots" },
-        { status: 400 }
-      );
+
+    // Support both legacy fields and new credentials object
+    if (platform === "slack") {
+      const appToken = slackAppToken || credentials?.app_token;
+      const botToken = slackBotToken || credentials?.bot_token;
+      if (!appToken || !botToken) {
+        return Response.json(
+          { error: "Slack requires app_token and bot_token" },
+          { status: 400 }
+        );
+      }
     }
-    if (resolvedPlatform === "mattermost" && (!mattermost?.url || !mattermost?.token)) {
-      return Response.json(
-        { error: "mattermost.url and mattermost.token are required for Mattermost bots" },
-        { status: 400 }
-      );
+    if (platform === "discord") {
+      const token = discord?.token || credentials?.token;
+      if (!token) {
+        return Response.json(
+          { error: "Discord requires token" },
+          { status: 400 }
+        );
+      }
     }
+    if (platform === "mattermost") {
+      const url = mattermost?.url || credentials?.url;
+      const token = mattermost?.token || credentials?.token;
+      if (!url || !token) {
+        return Response.json(
+          { error: "Mattermost requires url and token" },
+          { status: 400 }
+        );
+      }
+    }
+
+    // Resolve legacy fields from credentials for backward compat
+    const resolvedSlackAppToken = slackAppToken || credentials?.app_token || "";
+    const resolvedSlackBotToken = slackBotToken || credentials?.bot_token || "";
 
     const bot = await prisma.bot.create({
       data: {
         id,
         name,
-        platform: resolvedPlatform,
-        slackAppToken: slackAppToken ?? "",
-        slackBotToken: slackBotToken ?? "",
+        platform,
+        slackAppToken: resolvedSlackAppToken,
+        slackBotToken: resolvedSlackBotToken,
         ...(discord !== undefined && { discord }),
         ...(mattermost !== undefined && { mattermost }),
+        credentials: credentials ?? {},
         channels: channels ?? [],
         persona: persona ?? {},
         project: project ?? {},

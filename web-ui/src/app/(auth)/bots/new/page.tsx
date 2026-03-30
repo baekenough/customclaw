@@ -35,7 +35,7 @@ export default function NewBotPage() {
   // Form state
   const [id, setId] = useState("");
   const [name, setName] = useState("");
-  const [platform, setPlatform] = useState<"slack" | "discord" | "mattermost">("slack");
+  const [platform, setPlatform] = useState<"" | "slack" | "discord" | "mattermost">("");
   const [slackAppToken, setSlackAppToken] = useState("");
   const [slackBotToken, setSlackBotToken] = useState("");
   const [discordToken, setDiscordToken] = useState("");
@@ -90,6 +90,20 @@ export default function NewBotPage() {
     setSubmitting(true);
 
     try {
+      if (!platform) {
+        setError("플랫폼을 선택해주세요");
+        return;
+      }
+
+      const credentials =
+        platform === "slack"
+          ? { app_token: slackAppToken, bot_token: slackBotToken }
+          : platform === "discord"
+          ? { token: discordToken, guild_id: discordGuildId }
+          : platform === "mattermost"
+          ? { url: mattermostUrl, token: mattermostToken, port: parseInt(mattermostPort) || 8065 }
+          : {};
+
       const platformPayload =
         platform === "discord"
           ? { discord: { token: discordToken, guild_id: discordGuildId }, slackAppToken: "", slackBotToken: "" }
@@ -105,6 +119,7 @@ export default function NewBotPage() {
           name,
           platform,
           ...platformPayload,
+          credentials,
           channels: allowedChannels,
           persona: { display_name: displayName, description, personality },
           project: { repo_path: repoPath, github_repo: githubRepo },
@@ -169,10 +184,10 @@ export default function NewBotPage() {
               </Label>
               <Select
                 value={platform}
-                onValueChange={(v) => setPlatform(v as "slack" | "discord" | "mattermost")}
+                onValueChange={(v) => setPlatform(v as "" | "slack" | "discord" | "mattermost")}
               >
                 <SelectTrigger id="platform" className="h-9 text-sm">
-                  <SelectValue />
+                  <SelectValue placeholder="플랫폼 선택..." />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="slack">Slack</SelectItem>
@@ -180,6 +195,11 @@ export default function NewBotPage() {
                   <SelectItem value="mattermost">Mattermost</SelectItem>
                 </SelectContent>
               </Select>
+              {!platform && (
+                <p className="text-xs text-muted-foreground">
+                  플랫폼을 선택하면 해당 인증 정보 입력란이 나타납니다
+                </p>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">

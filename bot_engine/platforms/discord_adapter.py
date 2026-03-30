@@ -798,5 +798,6 @@ from bot_engine.platforms.registry import PlatformRegistry  # noqa: E402
 
 PlatformRegistry.register(
     "discord",
+    adapter_factory=DiscordAdapter,
     publisher_factory=lambda bot_token, **kw: DiscordResponsePublisher(bot_token=bot_token),
 )

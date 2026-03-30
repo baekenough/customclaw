@@ -7,35 +7,33 @@ import os
 import signal
 import sys
 import threading
+from collections import defaultdict
 
 import redis
 
 from bot_engine.config.loader import BotConfig, load_all_bots
 from bot_engine.platforms.base import PlatformAdapter
+from bot_engine.platforms.registry import PlatformRegistry
 from bot_engine.runtime_control import (
     consume_restart_request,
     is_supervised_runtime,
 )
 
+# Trigger adapter auto-registration at import time.
 try:
-    from bot_engine.platforms.slack_adapter import SlackAdapter
-    _HAS_SLACK = True
+    import bot_engine.platforms.slack_adapter as _  # noqa: F401
 except ImportError:
-    _HAS_SLACK = False
-
-try:
-    from bot_engine.platforms.mattermost_adapter import MattermostAdapter
-
-    _HAS_MATTERMOST = True
-except ImportError:
-    _HAS_MATTERMOST = False
+    pass
 
 try:
-    from bot_engine.platforms.discord_adapter import DiscordAdapter
-
-    _HAS_DISCORD = True
+    import bot_engine.platforms.mattermost_adapter as _  # noqa: F401
 except ImportError:
-    _HAS_DISCORD = False
+    pass
+
+try:
+    import bot_engine.platforms.discord_adapter as _  # noqa: F401
+except ImportError:
+    pass
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -49,6 +47,9 @@ class BotManager:
 
     Each call to :meth:`load_bots` groups configs by platform and creates one
     :class:`~bot_engine.platforms.base.PlatformAdapter` per platform group.
+    Platform adapters are instantiated via :class:`PlatformRegistry` — no
+    hard-coded ``if platform == ...`` branches.
+
     :meth:`start` then runs every adapter in a daemon thread and blocks until
     a shutdown signal is received.
     """
@@ -59,111 +60,119 @@ class BotManager:
         self._adapters: list[PlatformAdapter] = []
 
     def load_bots(self) -> None:
-        """Discover all bot configs and build platform adapters."""
+        """Discover all bot configs and build platform adapters via registry."""
         bots_dir = os.environ.get("BOTS_DIR", "/app/bots")
         configs = load_all_bots(bots_dir)
         log.info("Loaded %d bot configuration(s)", len(configs))
 
-        # Split configs by platform
-        slack_configs = [c for c in configs if c.platform == "slack"]
-        mm_configs = [c for c in configs if c.platform == "mattermost"]
-        discord_configs = [c for c in configs if c.platform == "discord"]
-        unknown = [
-            c for c in configs if c.platform not in {"slack", "mattermost", "discord"}
-        ]
-        if unknown:
-            log.warning(
-                "Ignoring %d config(s) with unrecognised platform(s): %s",
-                len(unknown),
-                [c.id for c in unknown],
+        # Group configs by platform
+        by_platform: dict[str, list[BotConfig]] = defaultdict(list)
+        for config in configs:
+            by_platform[config.platform].append(config)
+
+        for platform, platform_configs in by_platform.items():
+            if not PlatformRegistry.has_adapter(platform):
+                log.warning(
+                    "No adapter registered for platform %r; "
+                    "skipping %d bot(s): %s",
+                    platform,
+                    len(platform_configs),
+                    [c.id for c in platform_configs],
+                )
+                continue
+
+            adapters = self._build_adapters(platform, platform_configs)
+            self._adapters.extend(adapters)
+
+    def _build_adapters(
+        self,
+        platform: str,
+        configs: list[BotConfig],
+    ) -> list[PlatformAdapter]:
+        """Instantiate adapter(s) for *platform* via the registry.
+
+        Slack groups configs by ``slack_app_token`` so that bots sharing an
+        app token reuse a single Socket Mode connection.  All other platforms
+        receive all their configs in a single adapter instance.
+
+        Args:
+            platform: Platform name (e.g. ``"slack"``).
+            configs: Non-empty list of configs for this platform.
+
+        Returns:
+            List of constructed :class:`PlatformAdapter` instances.
+        """
+        if platform == "slack":
+            return self._build_slack_adapters(configs)
+
+        try:
+            adapter = PlatformRegistry.get_adapter(
+                platform, configs, self.redis_client
             )
-
-        # Build Slack adapters (group by app_token to share Socket Mode connections)
-        if slack_configs:
-            if not _HAS_SLACK:
+            if adapter is None:
                 log.error(
-                    "slack-bolt is not installed; skipping %d Slack "
-                    "bot(s).  Install it with: pip install slack-bolt",
-                    len(slack_configs),
+                    "Registry returned None for platform %r; skipping %d bot(s)",
+                    platform,
+                    len(configs),
                 )
-            else:
-                try:
-                    self._adapters.extend(
-                        self._build_slack_adapters(slack_configs)
-                    )
-                except Exception:
-                    log.exception(
-                        "Failed to initialise Slack adapter(s) for %d bot(s); "
-                        "skipping Slack platform",
-                        len(slack_configs),
-                    )
-
-        # Build Mattermost adapters
-        if mm_configs:
-            if not _HAS_MATTERMOST:
-                log.error(
-                    "mattermostdriver is not installed; skipping %d Mattermost "
-                    "bot(s).  Install it with: pip install mattermostdriver",
-                    len(mm_configs),
-                )
-            else:
-                try:
-                    adapter = MattermostAdapter(mm_configs, self.redis_client)
-                    self._adapters.append(adapter)
-                    log.info(
-                        "Initialised MattermostAdapter for %d bot(s): %s",
-                        len(mm_configs),
-                        [c.id for c in mm_configs],
-                    )
-                except Exception:
-                    log.exception(
-                        "Failed to initialise Mattermost adapter; skipping",
-                    )
-
-        # Build Discord adapters
-        if discord_configs:
-            if not _HAS_DISCORD:
-                log.error(
-                    "discord.py is not installed; skipping %d Discord "
-                    "bot(s).  Install it with: pip install discord.py",
-                    len(discord_configs),
-                )
-            else:
-                try:
-                    adapter = DiscordAdapter(discord_configs, self.redis_client)
-                    self._adapters.append(adapter)
-                    log.info(
-                        "Initialised DiscordAdapter for %d bot(s): %s",
-                        len(discord_configs),
-                        [c.id for c in discord_configs],
-                    )
-                except Exception:
-                    log.exception(
-                        "Failed to initialise Discord adapter; skipping",
-                    )
+                return []
+            log.info(
+                "Initialised %s adapter for %d bot(s): %s",
+                type(adapter).__name__,
+                len(configs),
+                [c.id for c in configs],
+            )
+            return [adapter]
+        except Exception:
+            log.exception(
+                "Failed to initialise %r adapter for %d bot(s); skipping",
+                platform,
+                len(configs),
+            )
+            return []
 
     def _build_slack_adapters(
         self, configs: list[BotConfig]
-    ) -> list[SlackAdapter]:
+    ) -> list[PlatformAdapter]:
         """Group Slack configs by *slack_app_token* and return one adapter each.
 
         Multiple bots that share an app token are served by a single Socket
-        Mode connection, so they are grouped together into one
-        :class:`SlackAdapter`.
-        """
-        token_groups: dict[str, list[BotConfig]] = {}
-        for config in configs:
-            token_groups.setdefault(config.slack_app_token, []).append(config)
+        Mode connection, so they are grouped together into one adapter instance
+        constructed via the registry.
 
-        adapters: list[SlackAdapter] = []
+        Args:
+            configs: All Slack :class:`BotConfig` instances.
+
+        Returns:
+            List of Slack :class:`PlatformAdapter` instances.
+        """
+        token_groups: dict[str, list[BotConfig]] = defaultdict(list)
+        for config in configs:
+            token_groups[config.slack_app_token].append(config)
+
+        adapters: list[PlatformAdapter] = []
         for group_configs in token_groups.values():
-            adapter = SlackAdapter(group_configs, self.redis_client)
-            adapters.append(adapter)
-            bot_names = [c.id for c in group_configs]
-            if len(group_configs) > 1:
-                log.info("Shared Socket Mode for Slack bots: %s", bot_names)
-            else:
-                log.info("Initialised Slack bot: %s", bot_names[0])
+            try:
+                adapter = PlatformRegistry.get_adapter(
+                    "slack", group_configs, self.redis_client
+                )
+                if adapter is None:
+                    log.error(
+                        "Registry returned None for Slack; skipping bots: %s",
+                        [c.id for c in group_configs],
+                    )
+                    continue
+                adapters.append(adapter)
+                bot_names = [c.id for c in group_configs]
+                if len(group_configs) > 1:
+                    log.info("Shared Socket Mode for Slack bots: %s", bot_names)
+                else:
+                    log.info("Initialised Slack bot: %s", bot_names[0])
+            except Exception:
+                log.exception(
+                    "Failed to initialise Slack adapter for bots: %s; skipping",
+                    [c.id for c in group_configs],
+                )
         return adapters
 
     def start(self) -> None:

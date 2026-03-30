@@ -469,6 +469,7 @@ from bot_engine.platforms.registry import PlatformRegistry  # noqa: E402
 
 PlatformRegistry.register(
     "mattermost",
+    adapter_factory=MattermostAdapter,
     publisher_factory=lambda token, url="", port=443, **kw: MattermostResponsePublisher(
         token=token, url=url, port=port,
     ),

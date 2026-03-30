@@ -35,7 +35,7 @@ type SlackAdapter struct {
 }
 
 // NewSlackAdapter creates a SlackAdapter for the given set of BotConfigs that
-// share the same SlackAppToken. rdb is used to publish incoming messages.
+// share the same app_token (Credentials["app_token"]). rdb is used to publish incoming messages.
 //
 // configs must be non-empty. The first config's tokens are used for the Socket
 // Mode connection; each config's security settings govern channel routing.
@@ -60,15 +60,15 @@ func NewSlackAdapter(configs []*config.BotConfig, rdb *redis.Client) *SlackAdapt
 	}
 
 	api := slack.New(
-		primary.SlackBotToken,
-		slack.OptionAppLevelToken(primary.SlackAppToken),
+		primary.Credentials["bot_token"],
+		slack.OptionAppLevelToken(primary.Credentials["app_token"]),
 	)
 	sm := socketmode.New(api)
 
 	return &SlackAdapter{
 		configs:    configs,
 		rdb:        rdb,
-		appToken:   primary.SlackAppToken,
+		appToken:   primary.Credentials["app_token"],
 		channelMap: channelMap,
 		defaultCfg: defaultCfg,
 		client:     api,
@@ -240,7 +240,7 @@ func (a *SlackAdapter) handleMessageCreate(ctx context.Context, ev *slackevents.
 		"user_id":             ev.User,
 		"text":                ev.Text,
 		"message_ts":          ev.TimeStamp,
-		"bot_token":           cfg.SlackBotToken,
+		"bot_token":           cfg.Credentials["bot_token"],
 		"platform":            "slack",
 		"event_type":          "create",
 		"platform_message_id": ev.TimeStamp,
@@ -284,7 +284,7 @@ func (a *SlackAdapter) handleMessageDeleted(ctx context.Context, ev *slackevents
 		"user_id":             "",
 		"text":                "",
 		"message_ts":          deletedTS,
-		"bot_token":           cfg.SlackBotToken,
+		"bot_token":           cfg.Credentials["bot_token"],
 		"platform":            "slack",
 		"event_type":          "delete",
 		"platform_message_id": deletedTS,
@@ -339,7 +339,7 @@ func (a *SlackAdapter) handleMessageChanged(ctx context.Context, ev *slackevents
 		"user_id":             ev.Message.User,
 		"text":                ev.Message.Text,
 		"message_ts":          editedTS,
-		"bot_token":           cfg.SlackBotToken,
+		"bot_token":           cfg.Credentials["bot_token"],
 		"platform":            "slack",
 		"event_type":          "edit",
 		"platform_message_id": editedTS,

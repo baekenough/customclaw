@@ -9,8 +9,9 @@ Configuration via environment variables:
     ANALYZER_GROUP:    Consumer group name (default: "{cli}-analyzers")
     REDIS_URL:         Redis connection URL (default: "redis://redis:6379")
     GITHUB_TOKEN:      GitHub token for posting issue comments
-    SLACK_BOT_TOKEN:   Slack bot token for notifications (optional)
-    SLACK_CHANNEL:     Slack channel ID for #agentnav (optional)
+    ALERT_BOT_TOKEN:   Bot token for notifications (optional; SLACK_BOT_TOKEN accepted as legacy fallback)
+    ALERT_CHANNEL:     Channel ID for notifications (optional; SLACK_CHANNEL accepted as legacy fallback)
+    ALERT_PLATFORM:    Notification platform override — e.g. "slack", "log" (optional)
 
 Usage:
     python -m bot_engine.docs_analyzer
@@ -328,12 +329,15 @@ _docs_notify_backend: NotifyBackend | None = None
 def _get_docs_notify_backend() -> NotifyBackend:
     global _docs_notify_backend
     if _docs_notify_backend is None:
-        token = os.environ.get("SLACK_BOT_TOKEN", "")
-        channel = os.environ.get("SLACK_CHANNEL", "")
+        # Prefer platform-agnostic names; fall back to legacy Slack-specific names.
+        token = os.environ.get("ALERT_BOT_TOKEN") or os.environ.get("SLACK_BOT_TOKEN", "")
+        channel = os.environ.get("ALERT_CHANNEL") or os.environ.get("SLACK_CHANNEL", "")
+        # Platform can be set explicitly; otherwise infer from token presence.
+        platform = os.environ.get("ALERT_PLATFORM") or ("slack" if token else "log")
         _docs_notify_backend = create_backend(
             token=token,
             channel=channel,
-            platform="slack" if token else "log",
+            platform=platform,
         )
     return _docs_notify_backend
 
