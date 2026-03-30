@@ -130,12 +130,12 @@ oh-my-customcode로 구동됩니다.
 project/
 +-- CLAUDE.md                    # 진입점
 +-- .claude/
-|   +-- agents/                  # 서브에이전트 정의 (45 파일)
-|   +-- skills/                  # 스킬 (86 디렉토리)
+|   +-- agents/                  # 서브에이전트 정의 (47 파일)
+|   +-- skills/                  # 스킬 (98 디렉토리)
 |   +-- rules/                   # 전역 규칙 (R000-R021)
 |   +-- hooks/                   # 훅 스크립트 (보안, 검증, HUD)
 |   +-- contexts/                # 컨텍스트 파일 (ecomode)
-+-- guides/                      # 레퍼런스 문서 (29 토픽)
++-- guides/                      # 레퍼런스 문서 (31 토픽)
 ```
 
 ## 오케스트레이션
@@ -165,17 +165,17 @@ project/
 |------|------|----------|
 | SW Engineer/Language | 6 | lang-golang-expert, lang-python-expert, lang-rust-expert, lang-kotlin-expert, lang-typescript-expert, lang-java21-expert |
 | SW Engineer/Backend | 6 | be-fastapi-expert, be-springboot-expert, be-go-backend-expert, be-express-expert, be-nestjs-expert, be-django-expert |
-| SW Engineer/Frontend | 4 | fe-vercel-agent, fe-vuejs-agent, fe-svelte-agent, fe-flutter-agent |
+| SW Engineer/Frontend | 5 | fe-vercel-agent, fe-vuejs-agent, fe-svelte-agent, fe-flutter-agent, fe-design-expert |
 | SW Engineer/Tooling | 3 | tool-npm-expert, tool-optimizer, tool-bun-expert |
 | DE Engineer | 6 | de-airflow-expert, de-dbt-expert, de-spark-expert, de-kafka-expert, de-snowflake-expert, de-pipeline-expert |
 | SW Engineer/Database | 4 | db-supabase-expert, db-postgres-expert, db-redis-expert, db-alembic-expert |
-| Security | 1 | sec-codeql-expert |
+| Security | 2 | sec-codeql-expert, sec-watcher-agent |
 | SW Architect | 2 | arch-documenter, arch-speckit-agent |
 | Infra Engineer | 2 | infra-docker-expert, infra-aws-expert |
 | QA Team | 3 | qa-planner, qa-writer, qa-engineer |
 | Manager | 6 | mgr-creator, mgr-updater, mgr-supplier, mgr-gitnerd, mgr-sauron, mgr-claude-code-bible |
 | System | 2 | sys-memory-keeper, sys-naggy |
-| **총계** | **45** | |
+| **총계** | **47** | |
 
 ## Agent Teams (MUST when enabled)
 
@@ -389,12 +389,12 @@ oh-my-customcode로 구동됩니다.
 project/
 +-- CLAUDE.md                    # 진입점
 +-- .claude/
-|   +-- agents/                  # 서브에이전트 정의 (45 파일)
-|   +-- skills/                  # 스킬 (86 디렉토리)
+|   +-- agents/                  # 서브에이전트 정의 (47 파일)
+|   +-- skills/                  # 스킬 (98 디렉토리)
 |   +-- rules/                   # 전역 규칙 (R000-R021)
 |   +-- hooks/                   # 훅 스크립트 (보안, 검증, HUD)
 |   +-- contexts/                # 컨텍스트 파일 (ecomode)
-+-- guides/                      # 레퍼런스 문서 (29 토픽)
++-- guides/                      # 레퍼런스 문서 (31 토픽)
 ```
 
 ## 오케스트레이션
@@ -424,17 +424,17 @@ project/
 |------|------|----------|
 | SW Engineer/Language | 6 | lang-golang-expert, lang-python-expert, lang-rust-expert, lang-kotlin-expert, lang-typescript-expert, lang-java21-expert |
 | SW Engineer/Backend | 6 | be-fastapi-expert, be-springboot-expert, be-go-backend-expert, be-express-expert, be-nestjs-expert, be-django-expert |
-| SW Engineer/Frontend | 4 | fe-vercel-agent, fe-vuejs-agent, fe-svelte-agent, fe-flutter-agent |
+| SW Engineer/Frontend | 5 | fe-vercel-agent, fe-vuejs-agent, fe-svelte-agent, fe-flutter-agent, fe-design-expert |
 | SW Engineer/Tooling | 3 | tool-npm-expert, tool-optimizer, tool-bun-expert |
 | DE Engineer | 6 | de-airflow-expert, de-dbt-expert, de-spark-expert, de-kafka-expert, de-snowflake-expert, de-pipeline-expert |
 | SW Engineer/Database | 4 | db-supabase-expert, db-postgres-expert, db-redis-expert, db-alembic-expert |
-| Security | 1 | sec-codeql-expert |
+| Security | 2 | sec-codeql-expert, sec-watcher-agent |
 | SW Architect | 2 | arch-documenter, arch-speckit-agent |
 | Infra Engineer | 2 | infra-docker-expert, infra-aws-expert |
 | QA Team | 3 | qa-planner, qa-writer, qa-engineer |
 | Manager | 6 | mgr-creator, mgr-updater, mgr-supplier, mgr-gitnerd, mgr-sauron, mgr-claude-code-bible |
 | System | 2 | sys-memory-keeper, sys-naggy |
-| **총계** | **45** | |
+| **총계** | **47** | |
 
 ## Agent Teams (MUST when enabled)
 
