@@ -18,36 +18,7 @@ CustomClaw is a multi-tenant bot platform that routes user messages through a Re
 
 ### 2.2 Worker ↔ Data Stores
 
-```mermaid
-flowchart LR
-    W[Worker]
-
-    subgraph PostgreSQL [PostgreSQL / pgvector]
-        MSG[(messages)]
-        MEM[(memories)]
-        BOT[(bots)]
-        AUL[(api_usage_logs)]
-    end
-
-    subgraph OS [OpenSearch]
-        IDX[(customclaw-memories\nnori + kNN hybrid)]
-    end
-
-    subgraph Cache [Search Cache]
-        L1[L1: Exact Match]
-        L2[L2: Semantic / Redis]
-    end
-
-    W -->|save / soft_delete / update| MSG
-    W -->|extract_and_store| MEM
-    W -->|index + embed| IDX
-    W -->|hybrid search| IDX
-    W -->|CDC cascade delete| MEM
-    W -->|CDC cascade delete| IDX
-    W -->|check / invalidate| L1
-    W -->|check / invalidate| L2
-    MEM -.->|source_message_id FK| MSG
-```
+<p align="center"><img src="../assets/diagrams/13-worker-data-stores.png" width="800" /></p>
 
 ### 2.3 Airflow DAG Processing
 
@@ -105,24 +76,7 @@ The **Go worker** (`go/`) is the primary production message processor. The Pytho
 
 **Two-phase tool-call protocol:**
 
-```mermaid
-sequenceDiagram
-    participant W as Worker
-    participant C as Claude CLI
-    participant T as ToolRegistry
-
-    W->>C: Phase 1 — system + memory context + tool descriptions + user message
-    C-->>W: response (may contain ```json {"tool_call": {...}}```)
-    alt tool_call detected
-        W->>T: execute(tool_name, args)
-        T-->>W: ToolResult.content
-        W->>C: Phase 2 — system + original message + tool result
-        C-->>W: final response (Korean)
-    else no tool_call
-        W-->>W: use Phase 1 response directly
-    end
-    W->>Platform: SendMessage (via PublisherFactory)
-```
+<p align="center"><img src="../assets/diagrams/14-tool-call-protocol.png" width="800" /></p>
 
 **Supported providers:**
 
@@ -376,51 +330,7 @@ All workflows that interact with the production server use SSH with deploy keys 
 
 ## 4. Data Flow — User Message End-to-End
 
-```mermaid
-sequenceDiagram
-    participant U as User (Discord/Slack)
-    participant PA as Platform Adapter
-    participant RS as Redis Stream
-    participant W as Go Worker
-    participant PG as PostgreSQL
-    participant OS as OpenSearch
-    participant CLI as Claude/Codex CLI
-
-    U->>PA: sends message in allowed channel
-    PA->>U: reaction hourglass
-    PA->>RS: xadd (bot_id, channel, thread, user, text, token)
-
-    W->>RS: xreadgroup (block 5s, count 1)
-    RS-->>W: message entry
-
-    W->>PG: save_message (role=user)
-    W->>PG: get_recent_messages (context window)
-    W->>OS: search memories (top-k=5, hybrid BM25+kNN)
-    OS-->>W: relevant memory snippets
-
-    W->>W: build system prompt + memory context + tool descriptions
-
-    alt full_agent mode
-        W->>CLI: single prompt (system + memory + history + user message)
-        CLI-->>W: final text
-    else limited mode (tool-call)
-        W->>CLI: Phase 1 prompt
-        CLI-->>W: response (may include tool_call block)
-        opt tool_call detected
-            W->>W: ToolRegistry.execute(tool_name, args)
-            W->>CLI: Phase 2 prompt (+ tool result)
-            CLI-->>W: final text
-        end
-    end
-
-    W->>U: SendMessage via PublisherFactory (reply in thread)
-    W->>PG: save_message (role=assistant)
-    W->>RS: xack (message acknowledged)
-
-    W-->>OS: extract_and_store (async, non-blocking)
-    W-->>PG: extract_and_store memory rows (async)
-    W->>U: reaction hourglass removed, check_mark added
-```
+<p align="center"><img src="../assets/diagrams/15-data-flow-e2e.png" width="800" /></p>
 
 **Step-by-step summary:**
 
