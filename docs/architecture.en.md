@@ -6,7 +6,7 @@
 
 ## 1. System Overview
 
-CustomClaw is a multi-tenant bot platform that routes user messages through a Redis Stream pipeline to a Go worker (primary) that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Platform adapters support Discord (primary), Slack (Socket Mode, optional profile), and Mattermost. A `PublisherFactory` with cached publisher instances handles platform-specific response delivery; unsupported platforms degrade gracefully via a `noopPublisher`. Container images are hosted on Amazon ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/*`). Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using hybrid BM25 keyword + kNN vector search with multi-tier caching (L1 exact, L2 semantic). A CDC pipeline cascades message deletions and edits to associated memories, maintaining search index consistency. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages nine autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, PR analysis, AgentNav issue analysis, documentation drift monitoring, and an example hello-world DAG.
+CustomClaw is a multi-tenant bot platform that routes user messages through a Redis Stream pipeline to a Go worker (primary) that invokes Claude CLI (Anthropic) or Codex CLI (OpenAI) as the reasoning engine. Platform adapters support Discord (primary), Slack (Socket Mode, optional profile), and Mattermost. A `PublisherFactory` with cached publisher instances handles platform-specific response delivery; unsupported platforms degrade gracefully via a `noopPublisher`. Container images are hosted on Amazon ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/customclaw/*`). Each bot is independently configured via YAML and can operate in two execution modes: a lightweight two-phase prompt/tool-call mode for structured tool use (GitHub, Airflow, code search, bot management), or a full-agent mode where Claude CLI has unrestricted access to its built-in file system and shell tools. Conversation history and long-term memories are persisted in PostgreSQL with the pgvector extension; memories are additionally indexed in OpenSearch using hybrid BM25 keyword + kNN vector search with multi-tier caching (L1 exact, L2 semantic). A CDC pipeline cascades message deletions and edits to associated memories, maintaining search index consistency. A Next.js 16 web UI backed by Prisma ORM provides GitHub OAuth authentication, bot management, DAG monitoring, and system health dashboards. Apache Airflow manages nine autonomous DAGs: issue analysis against the oh-my-customcode repository, Claude Code release monitoring, GPT Codex release monitoring, codebase indexing for RAG search, feedback collection, PR analysis, documentation drift monitoring, CustomClaw repository issue analysis, and an example hello-world DAG.
 
 ---
 
@@ -276,26 +276,24 @@ Triggered via GitHub Actions webhook (SSH) when a PR is opened, synchronized, or
 | Scope | `determine_analysis_scope` | Classifies PR as small/medium/large and sets max analysis turns |
 | Publish | `request_worker_analysis` | Acquires Redis dedup lock; publishes to `customclaw:analysis-requests` stream |
 
-**`agentnav_issue_analyzer`**
-
-Event-driven DAG triggered by the `docs_drift_monitor` DAG (or manually). Receives a GitHub issue describing which documentation sources changed, identifies the relevant source types (claude-code, codex, gemini-cli), and publishes per-source analysis requests to dedicated Redis Streams for the corresponding analyzer containers to consume.
-
-| Phase | Tasks | Description |
-|-------|-------|-------------|
-| Fetch | `fetch_issue_details` | Retrieves GitHub issue body describing changed doc sources |
-| Identify | `identify_sources` | Parses issue to determine affected sources (claude-code / codex / gemini-cli) |
-| Publish | `publish_analysis_requests` | Publishes to `customclaw:claude-analysis`, `customclaw:codex-analysis`, or `customclaw:gemini-analysis` Redis Streams |
-
 **`docs_drift_monitor`**
 
-Scheduled DAG (`0 */3 * * *` — every 3 hours) that polls official documentation for Claude Code, Codex, and Gemini CLI via their `llms.txt` endpoints. Compares content against stored Airflow Variable baselines and creates a consolidated GitHub issue (labeled `docs-drift`) when changes are detected. Triggers `agentnav_issue_analyzer` automatically for downstream deep analysis.
+Scheduled DAG (`0 */3 * * *` — every 3 hours) that polls official documentation for Claude Code, Codex, and Gemini CLI via their `llms.txt` endpoints. Compares content against stored Airflow Variable baselines and creates a consolidated GitHub issue (labeled `docs-drift`) when changes are detected.
 
 | Phase | Tasks | Description |
 |-------|-------|-------------|
 | Fetch | `fetch_doc_indexes` | Downloads `llms.txt` from each documentation source |
 | Detect | `detect_changes` | Diffs current content against Variable-stored baseline |
 | Report | `create_issue_if_needed` | Creates GitHub issue with `docs-drift` label when changes found |
-| Analyze | `trigger_analysis` | Triggers `agentnav_issue_analyzer` DAG for deep analysis |
+
+**`customclaw_issue_analyzer`**
+
+Triggered via GitHub Actions webhook (SSH) when issues are created or updated in the CustomClaw repository. Analyzes issues using a similar pipeline structure to omc_issue_analyzer.
+
+| Phase | Tasks | Description |
+|-------|-------|-------------|
+| Fetch | `fetch_issue_details` | Retrieves GitHub issue metadata and body |
+| Analyze | `analyze_issue` | Claude CLI analysis of the issue |
 
 **`example_hello_world`**
 
@@ -365,10 +363,14 @@ A dedicated Redis Stream consumer that processes PR analysis and issue analysis 
 
 | Workflow | File | Trigger | Description |
 |----------|------|---------|-------------|
+| Build & Push | `workflows/build-push.yml` | Push to develop/main | Builds Docker images and pushes to AWS ECR |
+| Go CI | `workflows/go-ci.yml` | Push/PR to develop | Runs Go linter and tests |
+| Issue Analyzer | `workflows/issue-analyzer.yml` | Issues events | SSHes to production server, triggers issue analysis DAG |
 | PR Analysis | `workflows/pr-analysis.yml` | `pull_request: [opened, synchronize, ready_for_review]` | SSHes to production server, triggers `omc_pr_analyzer` DAG with PR number. Skips draft PRs. |
+| PR Lifecycle | `workflows/pr-lifecycle.yml` | PR events | Manages PR lifecycle (labeling, status tracking) |
 | Feedback Submission | `workflows/feedback-submission.yml` | `workflow_dispatch` (manual) | Accepts title, body, feedback_type, anonymous flag. SSHes to server, triggers `omc_feedback_collector` DAG. |
 
-Both workflows use SSH with deploy keys to reach the production server and trigger Airflow DAGs via `docker exec`.
+All workflows that interact with the production server use SSH with deploy keys to reach it and trigger Airflow DAGs via `docker exec`.
 
 ---
 
@@ -533,6 +535,7 @@ All custom images are hosted on Amazon ECR: `849376369259.dkr.ecr.ap-northeast-2
 | `airflow` | `customclaw/airflow:develop` (ECR) | 8080 | DAG scheduler + webserver |
 | `go-worker` | Built from `./go/Dockerfile` | — | **Primary** AI response processing (Go) |
 | `web-ui` | `customclaw/web-ui:develop` (ECR) | 3000 | Management web interface |
+| `cli-keeper` | Built from `./docker/cli-keeper/Dockerfile` | — | CLI token refresh and update sidecar |
 
 **Profiled services** (activated via `--profile`):
 
@@ -544,12 +547,13 @@ All custom images are hosted on Amazon ECR: `849376369259.dkr.ecr.ap-northeast-2
 | `codex-analyzer` | `slack` | `customclaw/platform-adapter:develop` (ECR) | Docs drift analysis — Codex CLI |
 | `gemini-analyzer` | `slack` | `customclaw/platform-adapter:develop` (ECR) | Docs drift analysis — Gemini CLI |
 | `watchtower` | `auto-update` | `nickfedor/watchtower` | Auto-update via Docker labels |
+| `go-app` | `go-full` | Built from `./go/Dockerfile` | Go App server |
 
-Total: 6 active + 6 profiled services.
+Total: 7 active + 7 profiled services.
 
 The Go worker is started via an overlay compose file: `docker compose -f docker-compose.yml -f docker-compose.go-shadow.yml up -d go-worker`.
 
-The three analyzer services consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `agentnav_issue_analyzer` DAG. Each runs `bot_engine.docs_analyzer` with a different CLI backend.
+The three analyzer services consume from dedicated Redis Streams (`customclaw:claude-analysis`, `customclaw:codex-analysis`, `customclaw:gemini-analysis`) published by the `docs_drift_monitor` DAG. Each runs `bot_engine.docs_analyzer` with a different CLI backend.
 
 ### 6.2 Named Volumes
 

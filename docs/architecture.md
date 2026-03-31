@@ -129,8 +129,8 @@ Go worker는 Redis Consumer Group(`customclaw-workers`) 방식으로 `customclaw
 | `omc_codebase_indexer` | 스케줄러 | oh-my-customcode 코드베이스를 OpenSearch에 인덱싱 (RAG 검색용) |
 | `omc_feedback_collector` | Airflow REST API / CLI | 사용자 피드백 수신, 검증 후 GitHub 이슈 생성 (익명 제출 지원) |
 | `omc_pr_analyzer` | GitHub Actions 웹훅 (SSH) | PR 분석 요청을 Redis Stream에 발행, 분석 워커가 Claude CLI로 분석 수행. Redis 분산 락으로 중복 분석 방지 |
-| `agentnav_issue_analyzer` | docs_drift_monitor 트리거 / GitHub Actions webhook | docs-drift 이슈에서 변경된 문서 소스를 식별하고 소스별 Redis Stream에 분석 요청 발행 → claude/codex/gemini analyzer 컨테이너가 소비 |
 | `docs_drift_monitor` | `0 */3 * * *` (3시간 주기) | Claude Code·Codex·Gemini CLI 공식 문서 변경 감지 → GitHub docs-drift 이슈 생성 → agentnav_issue_analyzer 트리거 |
+| `customclaw_issue_analyzer` | GitHub Actions webhook (SSH) | CustomClaw 자체 저장소의 GitHub 이슈를 분석하는 파이프라인. omc_issue_analyzer와 유사한 구조 |
 | `example_hello_world` | 수동 / 스케줄러 | Airflow 동작 확인용 예제 DAG |
 
 ### 3.8 omcustom-driver (자동 개발 에이전트)
@@ -181,7 +181,11 @@ PR 분석 및 이슈 분석 요청을 처리하는 별도의 Redis Stream 컨슈
 
 | 워크플로우 | 파일 | 설명 |
 |-----------|------|------|
+| Build & Push | `workflows/build-push.yml` | Docker 이미지 빌드 후 AWS ECR에 푸시 |
+| Go CI | `workflows/go-ci.yml` | Go 코드 린트, 테스트 실행 |
+| Issue Analyzer | `workflows/issue-analyzer.yml` | 이슈 이벤트 발생 시 SSH로 서버에 접속, 분석 DAG 트리거 |
 | PR Analysis | `workflows/pr-analysis.yml` | PR 이벤트(opened, synchronize, ready_for_review) 발생 시 SSH로 서버에 접속, `omc_pr_analyzer` DAG 트리거 |
+| PR Lifecycle | `workflows/pr-lifecycle.yml` | PR 라이프사이클 관리 (라벨링, 상태 추적) |
 | Feedback Submission | `workflows/feedback-submission.yml` | 수동 `workflow_dispatch`로 피드백 제출. SSH로 `omc_feedback_collector` DAG 트리거 |
 
 ---
@@ -274,12 +278,14 @@ Docker 이미지는 AWS ECR (`849376369259.dkr.ecr.ap-northeast-2.amazonaws.com/
 | airflow | customclaw/airflow:develop (ECR) | **Active** | |
 | web-ui | customclaw/web-ui:develop (ECR) | **Active** | |
 | go-worker | go/Dockerfile (로컬 빌드) | **Active (Primary)** | `docker-compose.go-shadow.yml` |
+| cli-keeper | docker/cli-keeper/Dockerfile (로컬 빌드) | **Active** | CLI 토큰 갱신·업데이트 사이드카 |
 | platform-adapter | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | 플랫폼 어댑터 (Renamed from slack-bolt in v1.0.0) |
 | worker (Python) | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [legacy]`) | Deprecated |
 | claude-analyzer | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
 | codex-analyzer | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
 | gemini-analyzer | customclaw/platform-adapter:develop (ECR) | Profiled out (`profiles: [slack]`) | docs drift 분석 |
 | watchtower | nickfedor/watchtower | Profiled out (`profiles: [auto-update]`) | 자동 이미지 업데이트 |
+| go-app | go/Dockerfile (로컬 빌드) | Profiled out (`profiles: [go-full]`) | Go App 서버 |
 
 ### 헬스체크
 
