@@ -8,8 +8,8 @@
 
 name: example-bot                        # Unique bot ID (kebab-case)
 
-# Platform: "slack", "discord", or "mattermost"
-# platform: slack
+# Platform: "slack", "discord", or "mattermost" (required)
+platform: slack
 
 # Mattermost configuration (uncomment if platform: mattermost)
 # mattermost:
